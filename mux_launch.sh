@@ -17,13 +17,18 @@ cd "$APP_DIR" || exit 1
 
 mkdir -p "$APP_DIR/logs"
 
-# Ensure SDL uses the system libraries and background events
+# Ensure SDL uses system libraries and background events
 export PYSDL2_DLL_PATH="/usr/lib"
 export SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS=1
 export PYTHONDONTWRITEBYTECODE=1
 
-# Log to ramdisk while running
-python3 -u "$APP_DIR/app/main.py" "$@" >/tmp/controllermode.log 2>&1
+# Restart loop for in-app updates (exit code 42 means an update finished and app needs restart)
+while :; do
+	python3 -u "$APP_DIR/app/main.py" "$@" >/tmp/controllermode.log 2>&1
+	EXIT_STATUS=$?
+	[ "$EXIT_STATUS" -eq 42 ] || break
+done
+
 cp /tmp/controllermode.log "$APP_DIR/logs/app.log" 2>/dev/null
 
 # Clean up any residual USB gadget state if interrupted

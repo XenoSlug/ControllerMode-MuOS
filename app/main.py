@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ControllerMode-MuOS - Main Application Entrypoint
-Coordinates UI, Input Capture, USB Gadget, and Bluetooth Controllers.
+Coordinates UI, Input Capture, USB Gadget, Bluetooth Controllers, and In-App Updater.
 """
 import argparse
 import os
@@ -13,6 +13,7 @@ from config import load_config, save_config
 from input_reader import InputReader
 from rumble import RumbleController
 from ui import UIRenderer
+from updater import Updater, CURRENT_VERSION
 from usb_gadget import USBGadgetController
 from bt_controller import BluetoothController
 
@@ -38,6 +39,11 @@ MENU_ITEMS = [
         "desc": "Wireless Switch Pro Controller mode. Use 'Change Grip/Order'.",
     },
     {
+        "id": "check_update",
+        "title": "Check for Updates",
+        "desc": f"Current version: v{CURRENT_VERSION}. Check GitHub for releases.",
+    },
+    {
         "id": "toggle_layout",
         "title": "Toggle Button Layout",
         "desc": "Switch between Xbox (A bottom) and Nintendo (B bottom).",
@@ -58,6 +64,8 @@ class ControllerApp:
     def __init__(self, cli_mode=None):
         self.cli_mode = cli_mode
         self.config = load_config()
+        self.app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.updater = Updater(self.app_dir)
         self.rumble = RumbleController(
             enabled=self.config.get("rumble_enabled", True),
             default_strength=self.config.get("rumble_strength", 80)
@@ -70,7 +78,6 @@ class ControllerApp:
         self.ui = UIRenderer()
         self.running = True
 
-        # Signal handlers for clean termination
         signal.signal(signal.SIGINT, self._sig_handler)
         signal.signal(signal.SIGTERM, self._sig_handler)
 
@@ -79,6 +86,8 @@ class ControllerApp:
 
     def run(self):
         self.input.start()
+        # Check updates in background on startup
+        self.updater.check_update_async()
 
         if self.cli_mode:
             self.run_controller_session(self.cli_mode)
@@ -119,10 +128,13 @@ class ControllerApp:
 
                 if item_id in ("usb_pc", "usb_switch", "bt_ble", "bt_switch"):
                     self.run_controller_session(item_id)
-                    # Reset input triggers after session
                     self.input.exit_requested = False
                     last_a = True
                     last_start = True
+
+                elif item_id == "check_update":
+                    self.handle_updater_menu()
+                    last_a = True
 
                 elif item_id == "toggle_layout":
                     cur = self.config.get("button_layout", "xbox")
@@ -138,15 +150,75 @@ class ControllerApp:
                 elif item_id == "exit":
                     break
 
-            # Render UI
+            # Check update badge
+            update_badge = ""
+            if self.updater.status == "available" and self.updater.latest_info:
+                update_badge = f"★ New update available: {self.updater.latest_info['version']}! Select 'Check for Updates'."
+
             self.ui.render_menu(
                 MENU_ITEMS,
                 selected_index,
                 self.config.get("button_layout", "xbox"),
-                self.config.get("battery_saver", True)
+                self.config.get("battery_saver", True),
+                update_status=update_badge
             )
 
             time.sleep(0.02)
+
+    def handle_updater_menu(self):
+        """Interactive in-app update checker and installer."""
+        if self.updater.status in ("idle", "error"):
+            # Check now synchronously
+            self.ui.render_modal_message("Updater", "Checking GitHub for releases...", hint="")
+            self.updater.check_update()
+
+        last_a = False
+        last_b = False
+
+        while self.running:
+            state = self.input.get_state()
+            btn_a = state.a and not last_a
+            btn_b = (state.b and not last_b) or state.menu
+            last_a = state.a
+            last_b = state.b
+
+            if self.updater.status == "available":
+                v = self.updater.latest_info['version']
+                msg = f"New version {v} is available!\nInstall now?"
+                self.ui.render_modal_message("Update Available", msg, hint="[A] Install Update    [B] Cancel")
+
+                if btn_a:
+                    # Download and install
+                    self.rumble.pulse(100)
+                    self.ui.render_modal_message("Downloading Update", "Fetching from GitHub...", progress=0, hint="")
+                    
+                    def _prog(pct):
+                        self.ui.render_modal_message("Downloading Update", "Unpacking & Installing...", progress=pct, hint="")
+
+                    self.updater.apply_update(progress_cb=_prog)
+                    # If apply_update returns, an error occurred
+                    time.sleep(1.0)
+                    break
+
+                if btn_b:
+                    self.rumble.pulse(30)
+                    break
+
+            elif self.updater.status == "up_to_date":
+                msg = f"You are on the latest version (v{CURRENT_VERSION}).\nNo updates needed!"
+                self.ui.render_modal_message("Up to Date", msg, hint="[B] Back to Menu")
+                if btn_b or btn_a:
+                    self.rumble.pulse(30)
+                    break
+
+            elif self.updater.status == "error":
+                msg = f"{self.updater.error_message}\nPlease check Wi-Fi connection."
+                self.ui.render_modal_message("Update Check Failed", msg, hint="[B] Back to Menu")
+                if btn_b or btn_a:
+                    self.rumble.pulse(30)
+                    break
+
+            time.sleep(0.03)
 
     def run_controller_session(self, mode: str):
         print(f"[ControllerApp] Starting session for mode: {mode}")
@@ -171,7 +243,6 @@ class ControllerApp:
         last_sec = time.monotonic()
         reports_per_sec = 0
 
-        # Battery saver tracking
         saver_enabled = self.config.get("battery_saver", True)
         saver_timeout = self.config.get("saver_timeout_seconds", 30)
         last_activity = time.monotonic()
@@ -182,25 +253,20 @@ class ControllerApp:
                 now = time.monotonic()
                 state = self.input.get_state()
 
-                # Send input to host
                 if backend.send_report(state):
                     report_count += 1
 
-                # Check host rumble
                 if hasattr(backend, "read_rumble"):
                     rumble_data = backend.read_rumble()
                     if rumble_data:
                         self.rumble.set_rumble(rumble_data[0], rumble_data[1])
 
-                # Calculate report rate
                 if now - last_sec >= 1.0:
                     reports_per_sec = report_count
                     report_count = 0
                     last_sec = now
 
-                # Battery saver check
                 if saver_enabled:
-                    # Detect activity on buttons
                     has_activity = (
                         state.a or state.b or state.x or state.y or
                         state.l1 or state.r1 or state.l2 or state.r2 or
@@ -217,11 +283,10 @@ class ControllerApp:
                     elif now - last_activity > saver_timeout and not is_dark:
                         is_dark = True
 
-                # Render active screen (throttled when dark to save CPU/battery)
                 if not is_dark or (report_count % 30 == 0):
                     self.ui.render_active_screen(mode_title, state, reports_per_sec, is_dark)
 
-                time.sleep(0.004)  # ~250 Hz loop
+                time.sleep(0.004)
 
         finally:
             print("[ControllerApp] Exiting session, cleaning up backend...")
@@ -234,7 +299,6 @@ class ControllerApp:
         self.input.stop()
         self.rumble.close()
         self.ui.close()
-        # Ensure any leftover gadget is cleaned
         USBGadgetController().cleanup()
 
 def main():

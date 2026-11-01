@@ -24,6 +24,10 @@ Inspired by and ported from the external controller features in [Handtop](https:
   - Switch freely between **Xbox layout** (A at bottom) and **Nintendo layout** (B at bottom).
 - **📳 Safe Haptic Rumble**:
   - Translates host vibration commands to the RG35XX H internal vibration motor with rate-limiting to protect hardware.
+- **🔄 In-App One-Click Updater**:
+  - Automatically checks GitHub Releases for new updates in the background.
+  - Shows an update notification banner in the menu when an update is available.
+  - Downloads, verifies, installs the update, and restarts the app with zero manual intervention required.
 - **🛑 Seamless Exit Combo**:
   - Hold **Select + Start + L1 + R1** (or the **Menu / F** button) for 1.2 seconds at any time to cleanly disconnect USB/BT and return to muOS.
 

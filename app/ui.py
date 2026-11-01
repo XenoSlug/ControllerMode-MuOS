@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ControllerMode-MuOS - PySDL2 UI & Live Status Screen
-Renders menu and real-time controller status with pixel art on 640x480 RG35XX H display.
+Renders menu, real-time controller status with pixel art, and updater dialogs on 640x480 display.
 """
 import ctypes
 import os
@@ -30,6 +30,7 @@ C_DARKGRAY  = (45, 50, 60)
 C_ACTIVE    = (0, 230, 180)
 C_ACTIVE_BTN= (255, 80, 80)
 C_BORDER    = (60, 68, 82)
+C_GREEN     = (46, 180, 80)
 
 class UIRenderer:
     def __init__(self):
@@ -37,6 +38,7 @@ class UIRenderer:
         self.renderer = None
         self.font = None
         self.font_small = None
+        self.font_large = None
         self.initialized = False
         self._init_sdl()
 
@@ -61,7 +63,6 @@ class UIRenderer:
             self.window, -1, sdl2.SDL_RENDERER_ACCELERATED | sdl2.SDL_RENDERER_PRESENTVSYNC
         )
 
-        # Load system font
         font_paths = [
             "/opt/muos/share/theme/MustardOS/font/source.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -130,25 +131,36 @@ class UIRenderer:
         sdl2.SDL_RenderCopy(self.renderer, tex, None, ctypes.byref(rect))
         sdl2.SDL_DestroyTexture(tex)
 
-    def render_menu(self, items: list, selected_index: int, layout_name: str, saver_on: bool):
+    def render_menu(self, items: list, selected_index: int, layout_name: str, saver_on: bool, update_status: str = ""):
         if not self.initialized:
             return
 
         self.draw_rect(0, 0, SCREEN_W, SCREEN_H, C_BG)
 
         # Header banner
-        self.draw_rect(0, 0, SCREEN_W, 64, C_PANEL)
-        self.draw_rect(0, 63, SCREEN_W, 2, C_ACCENT)
-        self.draw_text("ControllerMode-MuOS", SCREEN_W // 2, 14, C_WHITE, "large", center_x=True)
-        self.draw_text("Turn your RG35XX H into a USB & Bluetooth Gamepad", SCREEN_W // 2, 42, C_GRAY, "small", center_x=True)
+        self.draw_rect(0, 0, SCREEN_W, 60, C_PANEL)
+        self.draw_rect(0, 59, SCREEN_W, 2, C_ACCENT)
+        self.draw_text("ControllerMode-MuOS", SCREEN_W // 2, 12, C_WHITE, "large", center_x=True)
+        self.draw_text("Turn RG35XX H into a USB & Bluetooth Gamepad", SCREEN_W // 2, 38, C_GRAY, "small", center_x=True)
 
-        # Menu cards
-        start_y = 85
-        card_h = 56
-        gap = 12
+        # Update notice if available
+        if update_status:
+            self.draw_rect(40, 68, SCREEN_W - 80, 24, (25, 45, 35), fill=True)
+            self.draw_rect(40, 68, SCREEN_W - 80, 24, C_GREEN, fill=False)
+            self.draw_text(update_status, SCREEN_W // 2, 73, C_GREEN, "small", center_x=True)
+            start_y = 100
+            card_h = 44
+            gap = 6
+        else:
+            start_y = 76
+            card_h = 46
+            gap = 8
 
+        # Render menu items
         for i, item in enumerate(items):
             y = start_y + i * (card_h + gap)
+            if y + card_h > SCREEN_H - 42:
+                break
             is_sel = (i == selected_index)
 
             bg_col = (36, 44, 58) if is_sel else C_PANEL
@@ -161,18 +173,52 @@ class UIRenderer:
                 self.draw_rect(40, y, 6, card_h, C_ACCENT, fill=True)
 
             title_col = C_WHITE if is_sel else (200, 205, 215)
-            self.draw_text(item["title"], 64, y + 10, title_col, "normal")
-            self.draw_text(item["desc"], 64, y + 32, C_GRAY, "small")
+            self.draw_text(item["title"], 60, y + 6, title_col, "normal")
+            self.draw_text(item["desc"], 60, y + 26, C_GRAY, "small")
 
-            # Selection marker
             if is_sel:
-                self.draw_text("►", SCREEN_W - 70, y + 18, C_ACCENT, "normal")
+                self.draw_text("►", SCREEN_W - 65, y + 14, C_ACCENT, "normal")
 
         # Bottom info bar
-        self.draw_rect(0, SCREEN_H - 40, SCREEN_W, 40, C_PANEL)
-        self.draw_rect(0, SCREEN_H - 41, SCREEN_W, 1, C_BORDER)
-        help_text = f"Layout: {layout_name.upper()}  |  Battery Saver: {'ON' if saver_on else 'OFF'}  |  [A] Select  [START] Launch"
-        self.draw_text(help_text, SCREEN_W // 2, SCREEN_H - 28, C_GRAY, "small", center_x=True)
+        self.draw_rect(0, SCREEN_H - 38, SCREEN_W, 38, C_PANEL)
+        self.draw_rect(0, SCREEN_H - 39, SCREEN_W, 1, C_BORDER)
+        help_text = f"Layout: {layout_name.upper()}  |  Saver: {'ON' if saver_on else 'OFF'}  |  [A] Select  [START] Launch"
+        self.draw_text(help_text, SCREEN_W // 2, SCREEN_H - 26, C_GRAY, "small", center_x=True)
+
+        sdl2.SDL_RenderPresent(self.renderer)
+
+    def render_modal_message(self, title: str, message: str, progress: int = None, hint: str = "[B] Close"):
+        if not self.initialized:
+            return
+
+        # Dim background
+        self.draw_rect(0, 0, SCREEN_W, SCREEN_H, (10, 12, 16))
+
+        # Dialog Box
+        dw, dh = 480, 220
+        dx, dy = (SCREEN_W - dw) // 2, (SCREEN_H - dh) // 2
+
+        self.draw_rect(dx, dy, dw, dh, C_PANEL, fill=True)
+        self.draw_rect(dx, dy, dw, dh, C_ACCENT, fill=False)
+
+        self.draw_text(title, SCREEN_W // 2, dy + 20, C_WHITE, "large", center_x=True)
+        self.draw_text(message, SCREEN_W // 2, dy + 70, C_WHITE, "normal", center_x=True)
+
+        # Progress bar if downloading
+        if progress is not None:
+            pb_w = 360
+            pb_h = 16
+            pb_x = (SCREEN_W - pb_w) // 2
+            pb_y = dy + 115
+            self.draw_rect(pb_x, pb_y, pb_w, pb_h, C_DARKGRAY, fill=True)
+            self.draw_rect(pb_x, pb_y, pb_w, pb_h, C_BORDER, fill=False)
+            fill_w = int((progress / 100.0) * pb_w)
+            if fill_w > 0:
+                self.draw_rect(pb_x, pb_y, fill_w, pb_h, C_ACTIVE, fill=True)
+            self.draw_text(f"{progress}%", SCREEN_W // 2, pb_y + 24, C_ACTIVE, "small", center_x=True)
+
+        if hint:
+            self.draw_text(hint, SCREEN_W // 2, dy + dh - 32, C_ACCENT2, "small", center_x=True)
 
         sdl2.SDL_RenderPresent(self.renderer)
 
@@ -181,7 +227,6 @@ class UIRenderer:
             return
 
         if is_dark:
-            # Battery saver display blanking
             self.draw_rect(0, 0, SCREEN_W, SCREEN_H, (0, 0, 0), fill=True)
             sdl2.SDL_RenderPresent(self.renderer)
             return
@@ -195,23 +240,22 @@ class UIRenderer:
         status_txt = f"{reports_per_sec} r/s  |  Active"
         self.draw_text(status_txt, SCREEN_W - 130, 16, C_WHITE, "small")
 
-        # Handheld Console Body (RG35XX H proportions)
+        # Handheld Console Body
         bx, by, bw, bh = 60, 68, 520, 310
         self.draw_rect(bx, by, bw, bh, (32, 36, 46), fill=True)
         self.draw_rect(bx, by, bw, bh, C_BORDER, fill=False)
 
-        # Console Screen Frame
+        # Screen Frame
         sw, sh = 240, 180
         sx, sy = bx + (bw - sw) // 2, by + 30
         self.draw_rect(sx, sy, sw, sh, (14, 16, 20), fill=True)
         self.draw_rect(sx, sy, sw, sh, C_BORDER, fill=False)
 
-        # Content on virtual screen
         self.draw_text("CONNECTED", sx + sw // 2, sy + 40, C_ACTIVE, "normal", center_x=True)
         self.draw_text("Controls forwarded to Host", sx + sw // 2, sy + 75, C_GRAY, "small", center_x=True)
         self.draw_text("OTG2/DC: Charging & Active", sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
 
-        # Shoulder Buttons L1/L2 and R1/R2
+        # Shoulders
         col_l1 = C_ACTIVE if state.l1 else C_DARKGRAY
         col_l2 = C_ACTIVE if state.l2 else C_DARKGRAY
         col_r1 = C_ACTIVE if state.r1 else C_DARKGRAY
@@ -221,7 +265,7 @@ class UIRenderer:
         self.draw_rect(bx + bw - 170, by - 12, 60, 12, col_r1)
         self.draw_rect(bx + bw - 100, by - 12, 60, 12, col_r2)
 
-        # D-Pad (Left side)
+        # D-Pad
         dx, dy = bx + 70, by + 100
         size = 28
         col_up = C_ACTIVE if state.dpad_up else C_DARKGRAY
@@ -235,7 +279,7 @@ class UIRenderer:
         self.draw_rect(dx + size, dy, size, size, col_rt)
         self.draw_rect(dx, dy, size, size, (50, 56, 70))
 
-        # Face Buttons (Right side: X, Y, A, B)
+        # Face buttons
         fx, fy = bx + bw - 85, by + 100
         btn_r = 14
         col_a = C_ACTIVE_BTN if state.a else C_DARKGRAY
@@ -243,12 +287,12 @@ class UIRenderer:
         col_x = C_ACTIVE_BTN if state.x else C_DARKGRAY
         col_y = C_ACTIVE_BTN if state.y else C_DARKGRAY
 
-        self.draw_circle(fx + 30, fy, btn_r, col_b)      # Right (B / A)
-        self.draw_circle(fx - 30, fy, btn_r, col_x)      # Left (X / Y)
-        self.draw_circle(fx, fy - 30, btn_r, col_y)      # Top (Y / X)
-        self.draw_circle(fx, fy + 30, btn_r, col_a)      # Bottom (A / B)
+        self.draw_circle(fx + 30, fy, btn_r, col_b)
+        self.draw_circle(fx - 30, fy, btn_r, col_x)
+        self.draw_circle(fx, fy - 30, btn_r, col_y)
+        self.draw_circle(fx, fy + 30, btn_r, col_a)
 
-        # Left Analog Stick
+        # Sticks
         lsx, lsy = bx + 84, by + 230
         self.draw_circle(lsx, lsy, 32, (20, 22, 28), fill=True)
         self.draw_circle(lsx, lsy, 32, C_BORDER, fill=False)
@@ -257,7 +301,6 @@ class UIRenderer:
         col_l3 = C_ACTIVE if state.l3 else (80, 88, 105)
         self.draw_circle(lsx + off_lx, lsy + off_ly, 16, col_l3, fill=True)
 
-        # Right Analog Stick
         rsx, rsy = bx + bw - 84, by + 230
         self.draw_circle(rsx, rsy, 32, (20, 22, 28), fill=True)
         self.draw_circle(rsx, rsy, 32, C_BORDER, fill=False)
@@ -266,7 +309,7 @@ class UIRenderer:
         col_r3 = C_ACTIVE if state.r3 else (80, 88, 105)
         self.draw_circle(rsx + off_rx, rsy + off_ry, 16, col_r3, fill=True)
 
-        # Select, Menu, Start
+        # Meta keys
         col_sel = C_ACTIVE if state.select else C_DARKGRAY
         col_menu = C_ACTIVE if state.menu else C_DARKGRAY
         col_sta = C_ACTIVE if state.start else C_DARKGRAY
@@ -274,7 +317,7 @@ class UIRenderer:
         self.draw_rect(sx + sw // 2 - 18, by + 240, 36, 12, col_menu)
         self.draw_rect(sx + sw - 66, by + 240, 36, 12, col_sta)
 
-        # Bottom Exit Banner
+        # Exit Banner
         self.draw_rect(0, SCREEN_H - 44, SCREEN_W, 44, (12, 14, 18))
         self.draw_rect(0, SCREEN_H - 45, SCREEN_W, 1, C_BORDER)
         self.draw_text("Hold SELECT + START + L1 + R1 (or MENU) to Exit back to muOS", SCREEN_W // 2, SCREEN_H - 30, C_ACCENT2, "small", center_x=True)
