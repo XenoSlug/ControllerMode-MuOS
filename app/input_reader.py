@@ -250,37 +250,41 @@ class InputReader:
             if ev_type == EV_KEY:
                 pressed = (val != 0)
 
-                # Track physical button states for reliable UI navigation
+                # Track physical button states for reliable UI navigation on RG35XX H:
+                # 0x130 (BTN_SOUTH) = Physical 'A' (Right)
+                # 0x131 (BTN_EAST)  = Physical 'B' (Bottom)
+                # 0x134 (BTN_WEST)  = Physical 'X' (Top)
+                # 0x133 (BTN_NORTH) = Physical 'Y' (Left)
                 if code in (BTN_SOUTH, 0x130):
-                    self.state.raw_b = pressed
-                elif code in (BTN_EAST, 0x131):
                     self.state.raw_a = pressed
-                elif code in (BTN_NORTH, 0x133):
-                    self.state.raw_x = pressed
+                elif code in (BTN_EAST, 0x131):
+                    self.state.raw_b = pressed
                 elif code in (BTN_WEST, 0x134):
+                    self.state.raw_x = pressed
+                elif code in (BTN_NORTH, 0x133):
                     self.state.raw_y = pressed
                 
                 # Mapped face buttons (Xbox layout vs Nintendo layout for gameplay)
-                if code in (BTN_SOUTH, 0x130):
-                    if self.button_layout == "nintendo":
-                        self.state.b = pressed
-                    else:
-                        self.state.a = pressed
-                elif code in (BTN_EAST, 0x131):
+                if code in (BTN_SOUTH, 0x130):  # Physical A (Right)
                     if self.button_layout == "nintendo":
                         self.state.a = pressed
                     else:
+                        self.state.b = pressed  # Xbox B is Right
+                elif code in (BTN_EAST, 0x131):  # Physical B (Bottom)
+                    if self.button_layout == "nintendo":
                         self.state.b = pressed
-                elif code in (BTN_NORTH, 0x133):
+                    else:
+                        self.state.a = pressed  # Xbox A is Bottom
+                elif code in (BTN_WEST, 0x134):  # Physical X (Top)
                     if self.button_layout == "nintendo":
                         self.state.x = pressed
                     else:
-                        self.state.y = pressed
-                elif code in (BTN_WEST, 0x134):
+                        self.state.y = pressed  # Xbox Y is Top
+                elif code in (BTN_NORTH, 0x133): # Physical Y (Left)
                     if self.button_layout == "nintendo":
                         self.state.y = pressed
                     else:
-                        self.state.x = pressed
+                        self.state.x = pressed  # Xbox X is Left
                         
                 # Shoulder buttons
                 elif code in (BTN_TL, 0x136):

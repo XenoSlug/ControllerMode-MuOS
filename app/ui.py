@@ -131,7 +131,7 @@ class UIRenderer:
                     if fill or (x * x + y * y >= (r - 2) * (r - 2)):
                         sdl2.SDL_RenderDrawPoint(self.renderer, int(cx + x), int(cy + y))
 
-    def draw_text(self, text: str, x: int, y: int, color=C_WHITE, font_type="normal", center_x=False):
+    def draw_text(self, text: str, x: int, y: int, color=C_WHITE, font_type="normal", center_x=False, center_y=False):
         if not self.initialized:
             return
         f = self.font
@@ -153,7 +153,8 @@ class UIRenderer:
         sdl2.SDL_FreeSurface(surf)
 
         draw_x = x - (w // 2) if center_x else x
-        rect = sdl2.SDL_Rect(int(draw_x), int(y), int(w), int(h))
+        draw_y = y - (h // 2) if center_y else y
+        rect = sdl2.SDL_Rect(int(draw_x), int(draw_y), int(w), int(h))
         sdl2.SDL_RenderCopy(self.renderer, tex, None, ctypes.byref(rect))
         sdl2.SDL_DestroyTexture(tex)
 
@@ -322,15 +323,31 @@ class UIRenderer:
                 self.draw_text("Controls forwarded to Host", sx + sw // 2, sy + 75, C_GRAY, "small", center_x=True)
             self.draw_text("OTG2/DC: Charging & Active", sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
 
-        # Shoulders
+        # Shoulders (RG35XX H physical layout: Outer Left = L1, Inner Left = L2, Inner Right = R2, Outer Right = R1)
         col_l1 = C_ACTIVE if state.l1 else C_DARKGRAY
         col_l2 = C_ACTIVE if state.l2 else C_DARKGRAY
-        col_r1 = C_ACTIVE if state.r1 else C_DARKGRAY
         col_r2 = C_ACTIVE if state.r2 else C_DARKGRAY
-        self.draw_rect(bx + 40, by - 12, 60, 12, col_l2)
-        self.draw_rect(bx + 110, by - 12, 60, 12, col_l1)
-        self.draw_rect(bx + bw - 170, by - 12, 60, 12, col_r1)
-        self.draw_rect(bx + bw - 100, by - 12, 60, 12, col_r2)
+        col_r1 = C_ACTIVE if state.r1 else C_DARKGRAY
+
+        # L1 (Outer Left)
+        self.draw_rect(bx + 35, by - 16, 65, 16, col_l1, fill=True)
+        self.draw_rect(bx + 35, by - 16, 65, 16, C_BORDER, fill=False)
+        self.draw_text("L1", bx + 35 + 32, by - 8, C_WHITE, "small", center_x=True, center_y=True)
+
+        # L2 (Inner Left)
+        self.draw_rect(bx + 110, by - 16, 65, 16, col_l2, fill=True)
+        self.draw_rect(bx + 110, by - 16, 65, 16, C_BORDER, fill=False)
+        self.draw_text("L2", bx + 110 + 32, by - 8, C_WHITE, "small", center_x=True, center_y=True)
+
+        # R2 (Inner Right)
+        self.draw_rect(bx + bw - 175, by - 16, 65, 16, col_r2, fill=True)
+        self.draw_rect(bx + bw - 175, by - 16, 65, 16, C_BORDER, fill=False)
+        self.draw_text("R2", bx + bw - 175 + 32, by - 8, C_WHITE, "small", center_x=True, center_y=True)
+
+        # R1 (Outer Right)
+        self.draw_rect(bx + bw - 100, by - 16, 65, 16, col_r1, fill=True)
+        self.draw_rect(bx + bw - 100, by - 16, 65, 16, C_BORDER, fill=False)
+        self.draw_text("R1", bx + bw - 100 + 32, by - 8, C_WHITE, "small", center_x=True, center_y=True)
 
         # D-Pad
         dx, dy = bx + 70, by + 100
@@ -346,18 +363,33 @@ class UIRenderer:
         self.draw_rect(dx + size, dy, size, size, col_rt)
         self.draw_rect(dx, dy, size, size, (50, 56, 70))
 
-        # Face buttons
+        # Face buttons (RG35XX H physical layout: Top = X, Bottom = B, Left = Y, Right = A)
         fx, fy = bx + bw - 85, by + 100
-        btn_r = 14
-        col_a = C_ACTIVE_BTN if state.a else C_DARKGRAY
-        col_b = C_ACTIVE_BTN if state.b else C_DARKGRAY
-        col_x = C_ACTIVE_BTN if state.x else C_DARKGRAY
-        col_y = C_ACTIVE_BTN if state.y else C_DARKGRAY
+        btn_r = 16
+        col_x = C_ACTIVE_BTN if state.raw_x else (45, 52, 66)
+        col_b = C_ACTIVE_BTN if state.raw_b else (45, 52, 66)
+        col_y = C_ACTIVE_BTN if state.raw_y else (45, 52, 66)
+        col_a = C_ACTIVE_BTN if state.raw_a else (45, 52, 66)
 
-        self.draw_circle(fx + 30, fy, btn_r, col_b)
-        self.draw_circle(fx - 30, fy, btn_r, col_x)
-        self.draw_circle(fx, fy - 30, btn_r, col_y)
-        self.draw_circle(fx, fy + 30, btn_r, col_a)
+        # Top: X
+        self.draw_circle(fx, fy - 32, btn_r, col_x, fill=True)
+        self.draw_circle(fx, fy - 32, btn_r, C_BORDER, fill=False)
+        self.draw_text("X", fx, fy - 32, C_WHITE, "small", center_x=True, center_y=True)
+
+        # Bottom: B
+        self.draw_circle(fx, fy + 32, btn_r, col_b, fill=True)
+        self.draw_circle(fx, fy + 32, btn_r, C_BORDER, fill=False)
+        self.draw_text("B", fx, fy + 32, C_WHITE, "small", center_x=True, center_y=True)
+
+        # Left: Y
+        self.draw_circle(fx - 32, fy, btn_r, col_y, fill=True)
+        self.draw_circle(fx - 32, fy, btn_r, C_BORDER, fill=False)
+        self.draw_text("Y", fx - 32, fy, C_WHITE, "small", center_x=True, center_y=True)
+
+        # Right: A
+        self.draw_circle(fx + 32, fy, btn_r, col_a, fill=True)
+        self.draw_circle(fx + 32, fy, btn_r, C_BORDER, fill=False)
+        self.draw_text("A", fx + 32, fy, C_WHITE, "small", center_x=True, center_y=True)
 
         # Sticks
         lsx, lsy = bx + 84, by + 230
