@@ -253,15 +253,15 @@ class InputReader:
                 # Track physical button states for reliable UI navigation on RG35XX H:
                 # 0x130 (BTN_SOUTH) = Physical 'A' (Right)
                 # 0x131 (BTN_EAST)  = Physical 'B' (Bottom)
-                # 0x134 (BTN_WEST)  = Physical 'X' (Top)
-                # 0x133 (BTN_NORTH) = Physical 'Y' (Left)
+                # 0x133 (BTN_NORTH) = Physical 'X' (Top)
+                # 0x134 (BTN_WEST)  = Physical 'Y' (Left)
                 if code in (BTN_SOUTH, 0x130):
                     self.state.raw_a = pressed
                 elif code in (BTN_EAST, 0x131):
                     self.state.raw_b = pressed
-                elif code in (BTN_WEST, 0x134):
-                    self.state.raw_x = pressed
                 elif code in (BTN_NORTH, 0x133):
+                    self.state.raw_x = pressed
+                elif code in (BTN_WEST, 0x134):
                     self.state.raw_y = pressed
                 
                 # Mapped face buttons (Xbox layout vs Nintendo layout for gameplay)
@@ -275,12 +275,12 @@ class InputReader:
                         self.state.b = pressed
                     else:
                         self.state.a = pressed  # Xbox A is Bottom
-                elif code in (BTN_WEST, 0x134):  # Physical X (Top)
+                elif code in (BTN_NORTH, 0x133): # Physical X (Top)
                     if self.button_layout == "nintendo":
                         self.state.x = pressed
                     else:
                         self.state.y = pressed  # Xbox Y is Top
-                elif code in (BTN_NORTH, 0x133): # Physical Y (Left)
+                elif code in (BTN_WEST, 0x134):  # Physical Y (Left)
                     if self.button_layout == "nintendo":
                         self.state.y = pressed
                     else:

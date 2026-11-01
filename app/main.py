@@ -125,9 +125,9 @@ class ControllerApp:
             last_dpad_up = state.dpad_up
             last_dpad_down = state.dpad_down
 
-            # Confirm selection with physical A button (Right) or Start
-            confirm = (state.raw_a and not last_a) or (state.start and not last_start)
-            last_a = state.raw_a
+            # Confirm selection with layout-appropriate A button (Xbox: bottom / Nintendo: right) or Start
+            confirm = (state.a and not last_a) or (state.start and not last_start)
+            last_a = state.a
             last_start = state.start
 
             if confirm:
@@ -192,10 +192,10 @@ class ControllerApp:
 
         while self.running:
             state = self.input.get_state()
-            btn_a = state.raw_a and not last_a
-            btn_b = (state.raw_b and not last_b) or state.menu
-            last_a = state.raw_a
-            last_b = state.raw_b
+            btn_a = state.a and not last_a
+            btn_b = (state.b and not last_b) or state.menu
+            last_a = state.a
+            last_b = state.b
 
             elapsed = time.monotonic() - start_time
 
@@ -305,7 +305,15 @@ class ControllerApp:
                 host_name = getattr(backend, "host_name", None)
 
                 if not is_dark or (report_count % 30 == 0):
-                    self.ui.render_active_screen(mode_title, state, reports_per_sec, is_dark, passkey=passkey, host_name=host_name)
+                    self.ui.render_active_screen(
+                        mode_title,
+                        state,
+                        reports_per_sec,
+                        is_dark,
+                        passkey=passkey,
+                        host_name=host_name,
+                        layout_name=self.config.get("button_layout", "xbox")
+                    )
 
                 time.sleep(0.004)
 

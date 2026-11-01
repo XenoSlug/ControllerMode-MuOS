@@ -114,34 +114,59 @@ class BluetoothController:
         self._bus = None
 
     def check_stack(self) -> bool:
-        """Ensures bluetoothd is running on muOS."""
+        """Ensures bluetoothd is running on muOS, sets Gamepad Class of Device and SSP mode."""
         res = subprocess.run(["hciconfig", "hci0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if res.returncode != 0:
             print("[Bluetooth] hci0 not ready, starting muOS bluetooth stack...")
             if os.path.exists("/opt/muos/script/init/S75bluetooth.sh"):
                 subprocess.run(["/opt/muos/script/init/S75bluetooth.sh", "start"])
                 time.sleep(1.5)
+        # Power on adapter
         subprocess.run(["bluetoothctl", "power", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.5)
+        time.sleep(0.3)
+        # Set Class of Device to Gamepad / Joystick (0x002508)
+        subprocess.run(["hciconfig", "hci0", "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["hciconfig", "hci0", "class", "0x002508"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Enable Secure Simple Pairing (SSP) so Windows/Linux can pair with Just Works (no PIN)
+        subprocess.run(["hciconfig", "hci0", "sspmode", "1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Enable Page Scan and Inquiry Scan so device is connectable and discoverable
+        subprocess.run(["hciconfig", "hci0", "piscan"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
 
     def _setup_agent(self):
         """Registers the auto-pairing agent via D-Bus and CLI."""
-        # 1. Shell agent as fallback
+        # 1. Shell agent that interacts with bluetoothctl prompts
         def _cli_agent():
             try:
-                # Tell bluetoothctl to run NoInputNoOutput default agent
                 p = subprocess.Popen(
                     ["bluetoothctl"],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
                 )
-                p.stdin.write("agent NoInputNoOutput\ndefault-agent\ndiscoverable on\npairable on\n")
+                p.stdin.write("agent NoInputNoOutput\n")
+                p.stdin.write("default-agent\n")
+                p.stdin.write("discoverable on\n")
+                p.stdin.write("pairable on\n")
                 p.stdin.flush()
+
                 while not self._stop_event.is_set():
-                    time.sleep(0.5)
+                    line = p.stdout.readline()
+                    if not line:
+                        break
+                    line_str = line.strip()
+                    # Auto-reply 'yes' to any authorization, passkey confirmation, or pin prompt
+                    if any(w in line_str for w in ["(yes/no)", "Confirm passkey", "Authorize service", "Authorize connection"]):
+                        p.stdin.write("yes\n")
+                        p.stdin.flush()
+                    elif "PIN code" in line_str or "Enter PIN" in line_str:
+                        p.stdin.write("0000\n")
+                        p.stdin.flush()
+                    elif "Passkey" in line_str:
+                        p.stdin.write("000000\n")
+                        p.stdin.flush()
                 p.terminate()
             except Exception:
                 pass
@@ -186,14 +211,13 @@ class BluetoothController:
         """Monitors connection state."""
         while not self._stop_event.is_set():
             try:
-                out = subprocess.check_output(["bluetoothctl", "info"], stderr=subprocess.DEVNULL).decode()
-                if "Connected: yes" in out:
+                out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], stderr=subprocess.DEVNULL).decode()
+                lines = [l.strip() for l in out.splitlines() if l.strip().startswith("Device")]
+                if lines:
                     self.is_connected = True
                     self.current_passkey = None
-                    for line in out.splitlines():
-                        if "Name:" in line or "Alias:" in line:
-                            self.host_name = line.split(":", 1)[1].strip()
-                            break
+                    parts = lines[0].split(maxsplit=2)
+                    self.host_name = parts[2] if len(parts) >= 3 else parts[1]
                 else:
                     self.is_connected = False
                     if not self.current_passkey:

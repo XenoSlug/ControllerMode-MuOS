@@ -240,7 +240,8 @@ class UIRenderer:
         self.draw_rect(0, SCREEN_H - 36, SCREEN_W, 36, C_PANEL)
         self.draw_rect(0, SCREEN_H - 37, SCREEN_W, 1, C_BORDER)
         item_counter = f"[{selected_index + 1}/{len(items)}]"
-        help_text = f"Layout: {layout_name.upper()}  |  Saver: {'ON' if saver_on else 'OFF'}  |  {item_counter}  [A] Select  [START] Launch"
+        btn_hint = "[Bottom (A)]" if layout_name.lower() == "xbox" else "[Right (A)]"
+        help_text = f"Layout: {layout_name.upper()}  |  Saver: {'ON' if saver_on else 'OFF'}  |  {item_counter}  {btn_hint} Select  [START] Launch"
         self.draw_text(help_text, SCREEN_W // 2, SCREEN_H - 24, C_GRAY, "small", center_x=True)
 
         sdl2.SDL_RenderPresent(self.renderer)
@@ -277,7 +278,7 @@ class UIRenderer:
 
         sdl2.SDL_RenderPresent(self.renderer)
 
-    def render_active_screen(self, mode_title: str, state, reports_per_sec: int, is_dark: bool = False, passkey: str = None, host_name: str = None):
+    def render_active_screen(self, mode_title: str, state, reports_per_sec: int, is_dark: bool = False, passkey: str = None, host_name: str = None, layout_name: str = "xbox"):
         if not self.initialized:
             return
 
@@ -363,33 +364,42 @@ class UIRenderer:
         self.draw_rect(dx + size, dy, size, size, col_rt)
         self.draw_rect(dx, dy, size, size, (50, 56, 70))
 
-        # Face buttons (RG35XX H physical layout: Top = X, Bottom = B, Left = Y, Right = A)
+        # Face buttons (Dynamic based on selected Xbox vs Nintendo layout)
         fx, fy = bx + bw - 85, by + 100
         btn_r = 16
-        col_x = C_ACTIVE_BTN if state.raw_x else (45, 52, 66)
-        col_b = C_ACTIVE_BTN if state.raw_b else (45, 52, 66)
-        col_y = C_ACTIVE_BTN if state.raw_y else (45, 52, 66)
-        col_a = C_ACTIVE_BTN if state.raw_a else (45, 52, 66)
+        col_top = C_ACTIVE_BTN if state.raw_x else (45, 52, 66)
+        col_bottom = C_ACTIVE_BTN if state.raw_b else (45, 52, 66)
+        col_left = C_ACTIVE_BTN if state.raw_y else (45, 52, 66)
+        col_right = C_ACTIVE_BTN if state.raw_a else (45, 52, 66)
 
-        # Top: X
-        self.draw_circle(fx, fy - 32, btn_r, col_x, fill=True)
+        is_xbox = (layout_name.lower() == "xbox")
+        lbl_top = "Y" if is_xbox else "X"
+        lbl_bottom = "A" if is_xbox else "B"
+        lbl_left = "X" if is_xbox else "Y"
+        lbl_right = "B" if is_xbox else "A"
+
+        # Top
+        self.draw_circle(fx, fy - 32, btn_r, col_top, fill=True)
         self.draw_circle(fx, fy - 32, btn_r, C_BORDER, fill=False)
-        self.draw_text("X", fx, fy - 32, C_WHITE, "small", center_x=True, center_y=True)
+        self.draw_text(lbl_top, fx, fy - 32, C_WHITE, "small", center_x=True, center_y=True)
 
-        # Bottom: B
-        self.draw_circle(fx, fy + 32, btn_r, col_b, fill=True)
+        # Bottom
+        self.draw_circle(fx, fy + 32, btn_r, col_bottom, fill=True)
         self.draw_circle(fx, fy + 32, btn_r, C_BORDER, fill=False)
-        self.draw_text("B", fx, fy + 32, C_WHITE, "small", center_x=True, center_y=True)
+        self.draw_text(lbl_bottom, fx, fy + 32, C_WHITE, "small", center_x=True, center_y=True)
 
-        # Left: Y
-        self.draw_circle(fx - 32, fy, btn_r, col_y, fill=True)
+        # Left
+        self.draw_circle(fx - 32, fy, btn_r, col_left, fill=True)
         self.draw_circle(fx - 32, fy, btn_r, C_BORDER, fill=False)
-        self.draw_text("Y", fx - 32, fy, C_WHITE, "small", center_x=True, center_y=True)
+        self.draw_text(lbl_left, fx - 32, fy, C_WHITE, "small", center_x=True, center_y=True)
 
-        # Right: A
-        self.draw_circle(fx + 32, fy, btn_r, col_a, fill=True)
+        # Right
+        self.draw_circle(fx + 32, fy, btn_r, col_right, fill=True)
         self.draw_circle(fx + 32, fy, btn_r, C_BORDER, fill=False)
-        self.draw_text("A", fx + 32, fy, C_WHITE, "small", center_x=True, center_y=True)
+        self.draw_text(lbl_right, fx + 32, fy, C_WHITE, "small", center_x=True, center_y=True)
+
+        # Layout indicator text below buttons
+        self.draw_text(f"Layout: {layout_name.upper()}", fx, fy + 65, C_ACCENT, "small", center_x=True)
 
         # Sticks
         lsx, lsy = bx + 84, by + 230
