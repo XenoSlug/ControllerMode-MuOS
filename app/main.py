@@ -160,7 +160,12 @@ class ControllerApp:
                 item_id = MENU_ITEMS[selected_index]["id"]
 
                 if item_id in ("usb_pc", "usb_switch", "bt_ble", "bt_switch"):
-                    self.run_controller_session(item_id)
+                    try:
+                        self.run_controller_session(item_id)
+                    except Exception as e:
+                        print(f"[Main] Error during session {item_id}: {e}")
+                        import traceback
+                        traceback.print_exc()
                     self.input.exit_requested = False
                     last_a = True
                     last_start = True
@@ -294,7 +299,14 @@ class ControllerApp:
         else:
             backend = BluetoothController(mode=mode)
             mode_title = "Bluetooth: Xbox Wireless" if mode == "bt_ble" else "Bluetooth: Switch Pro"
-            if not backend.start():
+            started = False
+            try:
+                started = backend.start()
+            except Exception as e:
+                print(f"[Bluetooth] Failed to start backend: {e}")
+                started = False
+
+            if not started:
                 for _ in range(50):
                     st = self.input.get_state()
                     if not st.a and not st.b and not st.raw_a and not st.raw_b and not st.start and not st.menu:
@@ -327,8 +339,11 @@ class ControllerApp:
                 now = time.monotonic()
                 state = self.input.get_state()
 
-                if backend.send_report(state):
-                    report_count += 1
+                try:
+                    if backend.send_report(state):
+                        report_count += 1
+                except Exception:
+                    pass
 
                 if hasattr(backend, "read_rumble"):
                     rumble_data = backend.read_rumble()

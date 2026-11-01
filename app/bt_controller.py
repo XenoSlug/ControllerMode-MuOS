@@ -10,6 +10,7 @@ import fcntl
 import os
 import pty
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -41,6 +42,30 @@ SVC_IFACE = "org.bluez.GattService1"
 CHR_IFACE = "org.bluez.GattCharacteristic1"
 DSC_IFACE = "org.bluez.GattDescriptor1"
 ADV_IFACE = "org.bluez.LEAdvertisement1"
+
+def safe_cmd(cmd_list, timeout=5, **kwargs):
+    """Safely runs a system command, capturing errors without throwing FileNotFoundError."""
+    if not cmd_list:
+        return None
+    try:
+        bin_path = shutil.which(cmd_list[0])
+        if not bin_path:
+            for prefix in ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/muos/bin"]:
+                cand = os.path.join(prefix, cmd_list[0])
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    bin_path = cand
+                    break
+        if not bin_path:
+            return None
+        return subprocess.run(
+            [bin_path] + cmd_list[1:],
+            stdout=kwargs.pop("stdout", subprocess.DEVNULL),
+            stderr=kwargs.pop("stderr", subprocess.DEVNULL),
+            timeout=timeout,
+            **kwargs
+        )
+    except Exception as e:
+        return None
 
 # Hat map: (dx, dy) -> hat value (0..7, 8 = centered)
 HAT_MAP = {
@@ -317,30 +342,33 @@ class BluetoothController:
 
     def check_stack(self) -> bool:
         """Ensures bluetoothd is running on muOS, sets Gamepad Class of Device, SSP mode, and SDP profile."""
-        res = subprocess.run(["hciconfig", "hci0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if res.returncode != 0:
-            print("[Bluetooth] hci0 not ready, starting muOS bluetooth stack...")
-            if os.path.exists("/opt/muos/script/init/S75bluetooth.sh"):
-                subprocess.run(["/opt/muos/script/init/S75bluetooth.sh", "start"])
-                time.sleep(1.5)
+        try:
+            res = safe_cmd(["hciconfig", "hci0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res is None or res.returncode != 0:
+                print("[Bluetooth] hci0 not ready, starting muOS bluetooth stack...")
+                if os.path.exists("/opt/muos/script/init/S75bluetooth.sh"):
+                    safe_cmd(["/opt/muos/script/init/S75bluetooth.sh", "start"], timeout=5)
+                    time.sleep(1.5)
 
-        # Power on adapter
-        subprocess.run(["bluetoothctl", "power", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.3)
+            # Power on adapter
+            safe_cmd(["bluetoothctl", "power", "on"])
+            time.sleep(0.3)
 
-        # Set Class of Device to Gamepad / Joystick (0x002508)
-        subprocess.run(["hciconfig", "hci0", "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["hciconfig", "hci0", "class", "0x002508"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Set Class of Device to Gamepad / Joystick (0x002508)
+            safe_cmd(["hciconfig", "hci0", "up"])
+            safe_cmd(["hciconfig", "hci0", "class", "0x002508"])
 
-        # Enable Secure Simple Pairing (SSP) so Windows/Linux can pair with Just Works (no PIN)
-        subprocess.run(["hciconfig", "hci0", "sspmode", "1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Enable Secure Simple Pairing (SSP) so Windows/Linux can pair with Just Works (no PIN)
+            safe_cmd(["hciconfig", "hci0", "sspmode", "1"])
 
-        # Enable Page Scan and Inquiry Scan so device is connectable and discoverable
-        subprocess.run(["hciconfig", "hci0", "piscan"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Enable Page Scan and Inquiry Scan so device is connectable and discoverable
+            safe_cmd(["hciconfig", "hci0", "piscan"])
 
-        # Register Classic Bluetooth HID profile in BlueZ SDP server
-        subprocess.run(["sdptool", "add", "HID"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["sdptool", "add", "GG"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Register Classic Bluetooth HID profile in BlueZ SDP server if sdptool is available
+            safe_cmd(["sdptool", "add", "HID"])
+            safe_cmd(["sdptool", "add", "GG"])
+        except Exception as e:
+            print(f"[Bluetooth] check_stack exception: {e}")
         return True
 
     def _start_l2cap_server(self):
@@ -376,7 +404,7 @@ class BluetoothController:
                         c_client.setblocking(False)
                         self._ctrl_client = c_client
                         print(f"[Bluetooth L2CAP] Control channel connected from {c_addr}")
-                    except (socket.timeout, BlockingIOError):
+                    except (socket.timeout, BlockingIOError, OSError):
                         continue
 
                     self._int_sock.settimeout(4.0)
@@ -439,8 +467,9 @@ class BluetoothController:
                 fl = fcntl.fcntl(master_fd, fcntl.F_GETFL)
                 fcntl.fcntl(master_fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
+                bin_btctl = shutil.which("bluetoothctl") or "/usr/bin/bluetoothctl"
                 p = subprocess.Popen(
-                    ["bluetoothctl"],
+                    [bin_btctl],
                     stdin=slave_fd,
                     stdout=slave_fd,
                     stderr=slave_fd,
@@ -461,6 +490,15 @@ class BluetoothController:
                 _send("default-agent")
                 _send("discoverable on")
                 _send("pairable on")
+
+                # Configure LE Advertising if supported by bluetoothctl
+                _send("menu advertise")
+                _send("clear")
+                _send("uuids 0x1812 0x180f")
+                _send("appearance 0x03C4")
+                _send("discoverable on")
+                _send("back")
+                _send("advertise on")
 
                 buf = b""
                 while not self._stop_event.is_set():
@@ -563,43 +601,48 @@ class BluetoothController:
 
     def start(self) -> bool:
         """Starts Bluetooth Gamepad service."""
-        self.check_stack()
-        self.is_active = True
-        self._stop_event.clear()
-        self.current_passkey = None
-        self._passkey_time = 0.0
+        try:
+            self.check_stack()
+            self.is_active = True
+            self._stop_event.clear()
+            self.current_passkey = None
+            self._passkey_time = 0.0
 
-        name = "RG35XX-H (Xbox)" if self.mode == "bt_ble" else "Pro Controller"
-        subprocess.run(["bluetoothctl", "system-alias", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            name = "RG35XX-H (Xbox)" if self.mode == "bt_ble" else "Pro Controller"
+            safe_cmd(["bluetoothctl", "system-alias", name])
 
-        self._start_l2cap_server()
-        self._setup_agent(name)
+            self._start_l2cap_server()
+            self._setup_agent(name)
 
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self._monitor_thread.start()
-        print(f"[Bluetooth] Advertising as '{name}'...")
-        return True
+            self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+            self._monitor_thread.start()
+            print(f"[Bluetooth] Advertising as '{name}'...")
+            return True
+        except Exception as e:
+            print(f"[Bluetooth] start failed: {e}")
+            return False
 
     def _monitor_loop(self):
         """Monitors connection state and connected host name."""
         while not self._stop_event.is_set():
             try:
                 # Check connected devices via bluetoothctl
-                out = subprocess.check_output(["bluetoothctl", "devices", "Connected"], stderr=subprocess.DEVNULL).decode()
-                lines = [l.strip() for l in out.splitlines() if l.strip().startswith("Device")]
-                if lines:
-                    self.is_connected = True
-                    parts = lines[0].split(maxsplit=2)
-                    self.host_name = parts[2] if len(parts) >= 3 else parts[1]
-                    if not self._conn_time:
-                        self._conn_time = time.monotonic()
-                elif self._int_client is None:
-                    self.is_connected = False
-                    self._conn_time = 0.0
-                    if not self.current_passkey:
-                        self.host_name = "Waiting for host..."
+                p = safe_cmd(["bluetoothctl", "devices", "Connected"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
+                if p and p.stdout:
+                    lines = [l.strip() for l in p.stdout.splitlines() if l.strip().startswith("Device")]
+                    if lines:
+                        self.is_connected = True
+                        parts = lines[0].split(maxsplit=2)
+                        self.host_name = parts[2] if len(parts) >= 3 else parts[1]
+                        if not self._conn_time:
+                            self._conn_time = time.monotonic()
+                    elif self._int_client is None:
+                        self.is_connected = False
+                        self._conn_time = 0.0
+                        if not self.current_passkey:
+                            self.host_name = "Waiting for host..."
 
-                # Retain current_passkey on screen for at least 15s so user can read it, or until 5s after connection
+                # Retain current_passkey on screen for at least 18s so user can read it, or until 5s after connection
                 now = time.monotonic()
                 if self.current_passkey:
                     if self.is_connected and (now - self._conn_time > 5.0):
@@ -616,69 +659,72 @@ class BluetoothController:
         if not self.is_active:
             return False
 
-        # Map buttons to 16-bit bitfield
-        buttons = 0
-        if state.a: buttons |= (1 << 0)
-        if state.b: buttons |= (1 << 1)
-        if state.x: buttons |= (1 << 2)
-        if state.y: buttons |= (1 << 3)
-        if state.l1: buttons |= (1 << 4)
-        if state.r1: buttons |= (1 << 5)
-        if state.l2: buttons |= (1 << 6)
-        if state.r2: buttons |= (1 << 7)
-        if state.select: buttons |= (1 << 8)
-        if state.start:  buttons |= (1 << 9)
-        if state.l3:     buttons |= (1 << 10)
-        if state.r3:     buttons |= (1 << 11)
-        if state.menu:   buttons |= (1 << 12)
+        try:
+            # Map buttons to 16-bit bitfield
+            buttons = 0
+            if state.a: buttons |= (1 << 0)
+            if state.b: buttons |= (1 << 1)
+            if state.x: buttons |= (1 << 2)
+            if state.y: buttons |= (1 << 3)
+            if state.l1: buttons |= (1 << 4)
+            if state.r1: buttons |= (1 << 5)
+            if state.l2: buttons |= (1 << 6)
+            if state.r2: buttons |= (1 << 7)
+            if state.select: buttons |= (1 << 8)
+            if state.start:  buttons |= (1 << 9)
+            if state.l3:     buttons |= (1 << 10)
+            if state.r3:     buttons |= (1 << 11)
+            if state.menu:   buttons |= (1 << 12)
 
-        # D-pad hat
-        dx = (1 if state.dpad_right else 0) - (1 if state.dpad_left else 0)
-        dy = (1 if state.dpad_down else 0) - (1 if state.dpad_up else 0)
-        hat = HAT_MAP.get((dx, dy), 8)
+            # D-pad hat
+            dx = (1 if state.dpad_right else 0) - (1 if state.dpad_left else 0)
+            dy = (1 if state.dpad_down else 0) - (1 if state.dpad_up else 0)
+            hat = HAT_MAP.get((dx, dy), 8)
 
-        # Analog sticks (0..255, center 128)
-        lx = max(0, min(255, (state.lx + 32768) >> 8))
-        ly = max(0, min(255, (state.ly + 32768) >> 8))
-        rx = max(0, min(255, (state.rx + 32768) >> 8))
-        ry = max(0, min(255, (state.ry + 32768) >> 8))
+            # Analog sticks (0..255, center 128)
+            lx = max(0, min(255, (state.lx + 32768) >> 8))
+            ly = max(0, min(255, (state.ly + 32768) >> 8))
+            rx = max(0, min(255, (state.rx + 32768) >> 8))
+            ry = max(0, min(255, (state.ry + 32768) >> 8))
 
-        # Triggers (0..255)
-        lt = state.lt_val if state.lt_val > 0 else (255 if state.l2 else 0)
-        rt = state.rt_val if state.rt_val > 0 else (255 if state.r2 else 0)
+            # Triggers (0..255)
+            lt = state.lt_val if state.lt_val > 0 else (255 if state.l2 else 0)
+            rt = state.rt_val if state.rt_val > 0 else (255 if state.r2 else 0)
 
-        # 9-byte standard HID report
-        report_data = struct.pack("<HBBBBBBB", buttons, hat, lx, ly, rx, ry, lt, rt)
+            # 9-byte standard HID report
+            report_data = struct.pack("<HBBBBBBB", buttons, hat, lx, ly, rx, ry, lt, rt)
 
-        sent = False
-        # 1. Send over L2CAP PSM 19 (HID Interrupt)
-        if self._int_client is not None:
-            try:
-                # 0xA1 header = HID Input Report (Report ID 1)
-                self._int_client.send(b"\xa1" + report_data)
-                sent = True
-            except (BlockingIOError, OSError):
-                pass
+            sent = False
+            # 1. Send over L2CAP PSM 19 (HID Interrupt)
+            if self._int_client is not None:
+                try:
+                    # 0xA1 header = HID Input Report (Report ID 1)
+                    self._int_client.send(b"\xa1" + report_data)
+                    sent = True
+                except (BlockingIOError, OSError):
+                    pass
 
-        # 2. Send over BLE GATT characteristic if active
-        if self._ble_report_chr is not None:
-            try:
-                if self.mode == "bt_ble":
-                    # Xbox Wireless Controller BLE report format (16 bytes)
-                    stick = lambda v: max(0, min(65535, v + 32768))
-                    trig = lambda v: max(0, min(1023, v * 1023 // 255))
-                    xb_hat = XBOX_HAT.get((dx, dy), 0)
-                    xb_report = struct.pack("<HHHHHHBH",
-                        stick(state.lx), stick(state.ly), stick(state.rx), stick(state.ry),
-                        trig(lt), trig(rt), xb_hat, buttons & 0x7FFF) + b"\x00"
-                    self._ble_report_chr.notify(xb_report)
-                else:
-                    self._ble_report_chr.notify(report_data)
-                sent = True
-            except Exception:
-                pass
+            # 2. Send over BLE GATT characteristic if active
+            if self._ble_report_chr is not None:
+                try:
+                    if self.mode == "bt_ble":
+                        # Xbox Wireless Controller BLE report format (16 bytes)
+                        stick = lambda v: max(0, min(65535, v + 32768))
+                        trig = lambda v: max(0, min(1023, v * 1023 // 255))
+                        xb_hat = XBOX_HAT.get((dx, dy), 0)
+                        xb_report = struct.pack("<HHHHHHBH",
+                            stick(state.lx), stick(state.ly), stick(state.rx), stick(state.ry),
+                            trig(lt), trig(rt), xb_hat, buttons & 0x7FFF) + b"\x00"
+                        self._ble_report_chr.notify(xb_report)
+                    else:
+                        self._ble_report_chr.notify(report_data)
+                    sent = True
+                except Exception:
+                    pass
 
-        return sent or self.is_connected
+            return sent or self.is_connected
+        except Exception:
+            return False
 
     def cleanup(self):
         """Cleanly shuts down Bluetooth gamepad sockets and advertisement."""
@@ -709,5 +755,5 @@ class BluetoothController:
             except Exception:
                 pass
 
-        subprocess.run(["bluetoothctl", "discoverable", "off"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        safe_cmd(["bluetoothctl", "discoverable", "off"])
         print("[Bluetooth] Bluetooth Controller stopped.")

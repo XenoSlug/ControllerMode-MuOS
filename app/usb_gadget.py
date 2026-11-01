@@ -240,10 +240,10 @@ class USBGadgetController:
             # Low buttons: Y(0), B(1), A(2), X(3), L(4), R(5), ZL(6), ZR(7)
             # High buttons: Minus(0), Plus(1), LStick(2), RStick(3), Home(4), Capture(5)
             b_low = 0
-            if state.x: b_low |= (1 << 0)  # Y button in Nintendo
-            if state.a: b_low |= (1 << 1)  # B button in Nintendo
-            if state.b: b_low |= (1 << 2)  # A button in Nintendo
-            if state.y: b_low |= (1 << 3)  # X button in Nintendo
+            if state.y: b_low |= (1 << 0)  # Y button in Nintendo Pro Controller
+            if state.b: b_low |= (1 << 1)  # B button in Nintendo Pro Controller
+            if state.a: b_low |= (1 << 2)  # A button in Nintendo Pro Controller
+            if state.x: b_low |= (1 << 3)  # X button in Nintendo Pro Controller
             if state.l1: b_low |= (1 << 4)
             if state.r1: b_low |= (1 << 5)
             if state.l2: b_low |= (1 << 6)
