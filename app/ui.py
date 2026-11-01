@@ -322,7 +322,8 @@ class UIRenderer:
                 self.draw_text(host_name[:24], sx + sw // 2, sy + 75, C_WHITE, "small", center_x=True)
             else:
                 self.draw_text("Controls forwarded to Host", sx + sw // 2, sy + 75, C_GRAY, "small", center_x=True)
-            self.draw_text("OTG2/DC: Charging & Active", sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
+            sub_hint = "Bluetooth: Wireless Active" if mode_title.startswith("Bluetooth") else "OTG2/DC: Charging & Active"
+            self.draw_text(sub_hint, sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
 
         # Shoulders (RG35XX H physical layout: Outer Left = L1, Inner Left = L2, Inner Right = R2, Outer Right = R1)
         col_l1 = C_ACTIVE if state.l1 else C_DARKGRAY

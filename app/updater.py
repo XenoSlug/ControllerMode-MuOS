@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 import zipfile
 
-CURRENT_VERSION = "1.0.7"
+CURRENT_VERSION = "1.0.8"
 REPO = "XenoSlug/ControllerMode-MuOS"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 RESTART_CODE = 42
