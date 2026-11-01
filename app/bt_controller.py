@@ -4,7 +4,7 @@ ControllerMode-MuOS - Bluetooth Controller Engine
 Supports:
   1. Bluetooth Classic HID (L2CAP PSM 17 Control & PSM 19 Interrupt) with SDP Gamepad record
   2. Bluetooth Low Energy (BLE HOGP - HID over GATT Profile 0x1812) via BlueZ D-Bus (when available)
-  3. Auto-approving pairing agent (NoInputNoOutput) to enforce Just Works pairing on PC / Steam / Windows / Linux
+  3. Continuous PTY pairing agent with ANSI escape stripping to accurately display PIN codes and auto-authorize
 """
 import fcntl
 import os
@@ -64,7 +64,7 @@ def safe_cmd(cmd_list, timeout=5, **kwargs):
             timeout=timeout,
             **kwargs
         )
-    except Exception as e:
+    except Exception:
         return None
 
 # Hat map: (dx, dy) -> hat value (0..7, 8 = centered)
@@ -393,7 +393,7 @@ class BluetoothController:
                 self._int_sock.listen(1)
                 print("[Bluetooth L2CAP] Server listening on PSM 17 (Control) & PSM 19 (Interrupt)...")
             except Exception as e:
-                print(f"[Bluetooth L2CAP] Sockets bind error: {e}")
+                print(f"[Bluetooth L2CAP] Sockets bind note: {e}")
                 return
 
             while not self._stop_event.is_set():
@@ -417,7 +417,7 @@ class BluetoothController:
                         self._conn_time = time.monotonic()
                         self.host_name = f"Connected ({i_addr[0]})"
                     except Exception as e:
-                        print(f"[Bluetooth L2CAP] Interrupt channel accept timed out or failed: {e}")
+                        print(f"[Bluetooth L2CAP] Interrupt channel accept note: {e}")
                         if self._ctrl_client:
                             try: self._ctrl_client.close()
                             except Exception: pass
@@ -450,7 +450,7 @@ class BluetoothController:
                         except Exception: pass
                         self._int_client = None
 
-                except Exception as e:
+                except Exception:
                     if not self._stop_event.is_set():
                         time.sleep(0.5)
 
@@ -458,7 +458,7 @@ class BluetoothController:
 
     def _setup_agent(self, name: str):
         """Registers the auto-pairing agent via bluetoothctl PTY and D-Bus."""
-        # 1. PTY-based bluetoothctl automation with NoInputNoOutput capability
+        # 1. PTY-based bluetoothctl automation with ANSI stripping and persistent agent
         def _cli_agent():
             master_fd, slave_fd = None, None
             p = None
@@ -484,21 +484,17 @@ class BluetoothController:
                     except Exception:
                         pass
 
+                time.sleep(0.2)
                 _send("power on")
-                # NoInputNoOutput tells host we are a pure gamepad with no display/keys (forces Just Works)
+                time.sleep(0.1)
                 _send("agent NoInputNoOutput")
+                time.sleep(0.1)
                 _send("default-agent")
+                time.sleep(0.1)
                 _send("discoverable on")
+                time.sleep(0.1)
                 _send("pairable on")
-
-                # Configure LE Advertising if supported by bluetoothctl
-                _send("menu advertise")
-                _send("clear")
-                _send("uuids 0x1812 0x180f")
-                _send("appearance 0x03C4")
-                _send("discoverable on")
-                _send("back")
-                _send("advertise on")
+                time.sleep(0.1)
 
                 buf = b""
                 while not self._stop_event.is_set():
@@ -506,26 +502,55 @@ class BluetoothController:
                         chunk = os.read(master_fd, 1024)
                         if chunk:
                             buf += chunk
-                            text = buf.decode("utf-8", errors="ignore")
+                            raw_text = buf.decode("utf-8", errors="ignore")
+                            # Strip all ANSI terminal color and control codes
+                            clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_text)
 
-                            # Parse 6-digit numeric passkey or PIN if presented by host
-                            m = re.search(r'(?:passkey|code|pin)\s*:?\s*(\d{4,6})', text, re.I)
+                            # Parse 4 to 6 digit numeric passkey or PIN
+                            m = re.search(r'(?:passkey|code|pin)\s*:?\s*(\d{4,6})', clean, re.I)
                             if not m:
-                                m = re.search(r'\b(\d{6})\b', text)
+                                m = re.search(r'\b(\d{6})\b', clean)
                             if m:
                                 self.current_passkey = m.group(1)
                                 self._passkey_time = time.monotonic()
+                                print(f"[Bluetooth] Pairing passkey detected: {self.current_passkey}")
 
-                            # Auto-confirm passkey / pairing / authorization requests
-                            if any(k in text.lower() for k in ["(yes/no)", "confirm passkey", "authorize service", "authorize connection", "accept"]):
+                            # Track connection events from bluetoothctl real-time stream
+                            m_conn = re.search(r'Device\s+([0-9A-Fa-f:]{17})\s+Connected:\s+(yes|no)', clean)
+                            if m_conn:
+                                if m_conn.group(2).lower() == "yes":
+                                    self.is_connected = True
+                                    self._conn_time = time.monotonic()
+                                    self.host_name = f"Connected ({m_conn.group(1)})"
+                                    print(f"[Bluetooth] Host connected: {m_conn.group(1)}")
+                                else:
+                                    if self._int_client is None:
+                                        self.is_connected = False
+                                        self._conn_time = 0.0
+                                        self.host_name = "Waiting for host..."
+                                        print("[Bluetooth] Host disconnected")
+
+                            m_name = re.search(r'Device\s+[0-9A-Fa-f:]{17}\s+(?:Name|Alias):\s+(.+)', clean)
+                            if m_name:
+                                self.host_name = m_name.group(1).strip()
+
+                            # Auto-confirm passkey / pairing / service authorization requests
+                            clean_lower = clean.lower()
+                            if any(k in clean_lower for k in ["yes/no", "(yes/no)", "confirm", "authorize", "accept"]):
                                 _send("yes")
+                                print("[Bluetooth] Responded: yes")
                                 buf = b""
-                            elif "pin" in text.lower() and "?" in text:
+                            elif "pin" in clean_lower and any(k in clean_lower for k in ["enter", "request", "?"]):
                                 _send("0000")
+                                print("[Bluetooth] Responded PIN: 0000")
+                                buf = b""
+                            elif "request passkey" in clean_lower:
+                                _send("0")
+                                print("[Bluetooth] Responded Passkey: 0")
                                 buf = b""
                     except (BlockingIOError, InterruptedError):
                         pass
-                    time.sleep(0.05)
+                    time.sleep(0.04)
 
                 if p:
                     p.terminate()
@@ -547,57 +572,59 @@ class BluetoothController:
                 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
                 self._bus = dbus.SystemBus()
 
-                # Register D-Bus pairing agent with NoInputNoOutput
-                self._agent = DbusPairingAgent(self._bus, self)
-                manager = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"), AGENT_MGR)
-                manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
-                manager.RequestDefaultAgent(AGENT_PATH)
+                # Register D-Bus pairing agent with NoInputNoOutput in its own try/except
+                try:
+                    self._agent = DbusPairingAgent(self._bus, self)
+                    manager = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"), AGENT_MGR)
+                    manager.RegisterAgent(AGENT_PATH, "NoInputNoOutput")
+                    manager.RequestDefaultAgent(AGENT_PATH)
+                except Exception as e:
+                    print(f"[Bluetooth] D-Bus Agent note: {e}")
 
-                # Find Bluetooth adapter
-                om = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/"), OM_IFACE)
-                adapter_path = next((p for p, ifs in om.GetManagedObjects().items() if GATT_MGR in ifs), None)
+                # Find Bluetooth adapter and register GATT Application
+                try:
+                    om = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/"), OM_IFACE)
+                    adapter_path = next((p for p, ifs in om.GetManagedObjects().items() if GATT_MGR in ifs), None)
 
-                if adapter_path:
-                    adapter = self._bus.get_object(BLUEZ_SERVICE, adapter_path)
-                    props = dbus.Interface(adapter, PROP_IFACE)
-                    props.Set("org.bluez.Adapter1", "Powered", True)
-                    props.Set("org.bluez.Adapter1", "Pairable", True)
-                    props.Set("org.bluez.Adapter1", "Alias", name)
+                    if adapter_path:
+                        adapter = self._bus.get_object(BLUEZ_SERVICE, adapter_path)
+                        props = dbus.Interface(adapter, PROP_IFACE)
+                        props.Set("org.bluez.Adapter1", "Powered", True)
+                        props.Set("org.bluez.Adapter1", "Pairable", True)
+                        props.Set("org.bluez.Adapter1", "Alias", name)
 
-                    # Build BLE GATT Application (HID Service 0x1812 & Battery 0x180f)
-                    app = BleApplication(self._bus)
-                    hid = BleService(self._bus, app, 0, "1812")
-                    app.services.append(hid)
-                    BleCharacteristic(hid, 0, "2a4a", ["read"], bytes([0x11, 0x01, 0x00, 0x02]))
-                    BleCharacteristic(hid, 1, "2a4b", ["encrypt-read"], XBOX_REPORT_MAP if self.mode == "bt_ble" else GENERIC_REPORT_MAP)
-                    BleCharacteristic(hid, 2, "2a4c", ["write-without-response"], b"\x00")
-                    BleCharacteristic(hid, 3, "2a4e", ["read", "write-without-response"], b"\x01")
-                    
-                    self._ble_report_chr = BleCharacteristic(hid, 4, "2a4d", ["encrypt-read", "notify"], bytes(16 if self.mode == "bt_ble" else 9))
-                    BleDescriptor(self._ble_report_chr, 0, "2908", ["read"], bytes([0x01, 0x01]))
+                        app = BleApplication(self._bus)
+                        hid = BleService(self._bus, app, 0, "1812")
+                        app.services.append(hid)
+                        BleCharacteristic(hid, 0, "2a4a", ["read"], bytes([0x11, 0x01, 0x00, 0x02]))
+                        BleCharacteristic(hid, 1, "2a4b", ["encrypt-read"], XBOX_REPORT_MAP if self.mode == "bt_ble" else GENERIC_REPORT_MAP)
+                        BleCharacteristic(hid, 2, "2a4c", ["write-without-response"], b"\x00")
+                        BleCharacteristic(hid, 3, "2a4e", ["read", "write-without-response"], b"\x01")
+                        
+                        self._ble_report_chr = BleCharacteristic(hid, 4, "2a4d", ["encrypt-read", "notify"], bytes(16 if self.mode == "bt_ble" else 9))
+                        BleDescriptor(self._ble_report_chr, 0, "2908", ["read"], bytes([0x01, 0x01]))
 
-                    bat = BleService(self._bus, app, 1, "180f")
-                    app.services.append(bat)
-                    BleCharacteristic(bat, 0, "2a19", ["read", "notify"], bytes([100]))
+                        bat = BleService(self._bus, app, 1, "180f")
+                        app.services.append(bat)
+                        BleCharacteristic(bat, 0, "2a19", ["read", "notify"], bytes([100]))
 
-                    gatt = dbus.Interface(adapter, GATT_MGR)
-                    gatt.RegisterApplication(app.path, {}, reply_handler=lambda: print("[Bluetooth BLE] GATT HID service registered"), error_handler=lambda e: print(f"[Bluetooth BLE] GATT reg failed: {e}"))
-                    self._ble_app = app
+                        gatt = dbus.Interface(adapter, GATT_MGR)
+                        gatt.RegisterApplication(app.path, {}, reply_handler=lambda: print("[Bluetooth BLE] GATT HID service registered"), error_handler=lambda e: print(f"[Bluetooth BLE] GATT reg failed: {e}"))
+                        self._ble_app = app
 
-                    # Register BLE Advertisement
-                    self._ble_adv = BleAdvertisement(self._bus, name=name)
-                    advm = dbus.Interface(adapter, ADV_MGR)
-                    advm.RegisterAdvertisement(self._ble_adv.path, {}, reply_handler=lambda: print(f"[Bluetooth BLE] Advertising as '{name}'"), error_handler=lambda e: print(f"[Bluetooth BLE] Adv failed: {e}"))
+                        self._ble_adv = BleAdvertisement(self._bus, name=name)
+                        advm = dbus.Interface(adapter, ADV_MGR)
+                        advm.RegisterAdvertisement(self._ble_adv.path, {}, reply_handler=lambda: print(f"[Bluetooth BLE] Advertising as '{name}'"), error_handler=lambda e: print(f"[Bluetooth BLE] Adv failed: {e}"))
 
-                    # Run GLib mainloop in background thread for D-Bus signals
-                    def _glib_worker():
-                        self._dbus_loop = GLib.MainLoop()
-                        self._dbus_loop.run()
+                        def _glib_worker():
+                            self._dbus_loop = GLib.MainLoop()
+                            self._dbus_loop.run()
 
-                    threading.Thread(target=_glib_worker, daemon=True).start()
-                    print("[Bluetooth] D-Bus BLE Gamepad and pairing agent registered.")
+                        threading.Thread(target=_glib_worker, daemon=True).start()
+                except Exception as e:
+                    print(f"[Bluetooth] D-Bus GATT note: {e}")
             except Exception as e:
-                print(f"[Bluetooth] Note: D-Bus setup skipped ({e}). Relying on Classic L2CAP + bluetoothctl.")
+                print(f"[Bluetooth] D-Bus SystemBus note: {e}")
 
     def start(self) -> bool:
         """Starts Bluetooth Gamepad service."""
@@ -623,36 +650,17 @@ class BluetoothController:
             return False
 
     def _monitor_loop(self):
-        """Monitors connection state and connected host name."""
+        """Monitors passkey expiry timer and connection state."""
         while not self._stop_event.is_set():
-            try:
-                # Check connected devices via bluetoothctl
-                p = safe_cmd(["bluetoothctl", "devices", "Connected"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
-                if p and p.stdout:
-                    lines = [l.strip() for l in p.stdout.splitlines() if l.strip().startswith("Device")]
-                    if lines:
-                        self.is_connected = True
-                        parts = lines[0].split(maxsplit=2)
-                        self.host_name = parts[2] if len(parts) >= 3 else parts[1]
-                        if not self._conn_time:
-                            self._conn_time = time.monotonic()
-                    elif self._int_client is None:
-                        self.is_connected = False
-                        self._conn_time = 0.0
-                        if not self.current_passkey:
-                            self.host_name = "Waiting for host..."
-
-                # Retain current_passkey on screen for at least 18s so user can read it, or until 5s after connection
-                now = time.monotonic()
-                if self.current_passkey:
-                    if self.is_connected and (now - self._conn_time > 5.0):
-                        self.current_passkey = None
-                    elif now - self._passkey_time > 18.0:
-                        self.current_passkey = None
-
-            except Exception:
-                pass
-            time.sleep(0.8)
+            now = time.monotonic()
+            if self.current_passkey:
+                # If connected, retain code on screen for 5 seconds after connection
+                if self.is_connected and (now - self._conn_time > 5.0):
+                    self.current_passkey = None
+                # Or keep on screen for up to 25 seconds during pairing
+                elif now - self._passkey_time > 25.0:
+                    self.current_passkey = None
+            time.sleep(0.5)
 
     def send_report(self, state) -> bool:
         """Sends GamepadState over Bluetooth link (L2CAP and/or BLE GATT)."""
