@@ -9,6 +9,14 @@ import signal
 import sys
 import time
 
+# Ensure vendored dependencies in deps/ are prioritized
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+DEPS_DIR = os.path.join(APP_ROOT, "deps")
+if os.path.isdir(DEPS_DIR) and DEPS_DIR not in sys.path:
+    sys.path.insert(0, DEPS_DIR)
+if APP_ROOT not in sys.path:
+    sys.path.insert(0, APP_ROOT)
+
 from config import load_config, save_config
 from input_reader import InputReader
 from rumble import RumbleController

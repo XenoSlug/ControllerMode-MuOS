@@ -8,6 +8,11 @@ import os
 import sys
 import time
 
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+DEPS_DIR = os.path.join(APP_ROOT, "deps")
+if os.path.isdir(DEPS_DIR) and DEPS_DIR not in sys.path:
+    sys.path.insert(0, DEPS_DIR)
+
 try:
     import sdl2
     import sdl2.ext
