@@ -6,6 +6,7 @@ Emulates standard USB HID Gamepad and Nintendo Switch HORI Pad over USB-C (OTG2)
 import glob
 import os
 import struct
+import subprocess
 import time
 
 GADGET_DIR = "/sys/kernel/config/usb_gadget/controller-mode"
@@ -83,10 +84,22 @@ def find_udc() -> str:
         except OSError:
             pass
 
-    # Check sysfs
-    udcs = glob.glob("/sys/class/udc/*")
-    if udcs:
-        return os.path.basename(udcs[0])
+    # Check sysfs /sys/class/udc
+    if os.path.exists("/sys/class/udc"):
+        udcs = [u for u in os.listdir("/sys/class/udc") if not u.startswith(".")]
+        if udcs:
+            return udcs[0]
+
+    # Check OTG controller file
+    for p in ["/tmp/udc_name", "/run/udc_name"]:
+        try:
+            with open(p, "r") as f:
+                udc = f.read().strip()
+                if udc and os.path.exists(f"/sys/class/udc/{udc}"):
+                    return udc
+        except OSError:
+            pass
+
     return "5100000.udc-controller"
 
 class USBGadgetController:
@@ -95,15 +108,25 @@ class USBGadgetController:
         self.udc = find_udc()
         self.is_active = False
         self._dev_fd = None
+        self.error_message = ""
 
     def start(self) -> bool:
         """Sets up the USB HID Gadget in ConfigFS and binds UDC."""
         self.cleanup()
-        print(f"[USBGadget] Initializing gadget mode '{self.mode}' on UDC '{self.udc}'...")
+        self.error_message = ""
 
-        # Ensure configfs is mounted
+        # 1. Modprobe required gadget modules on Linux/muOS
+        for mod in ["libcomposite", "usb_f_hid", "sunxi-musb"]:
+            subprocess.run(["modprobe", mod], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 2. Ensure configfs is mounted
         if not os.path.ismount("/sys/kernel/config"):
-            os.system("mount -t configfs none /sys/kernel/config 2>/dev/null")
+            subprocess.run(["mount", "-t", "configfs", "none", "/sys/kernel/config"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.1)
+
+        # 3. Detect UDC
+        self.udc = find_udc()
+        print(f"[USBGadget] Initializing gadget mode '{self.mode}' on UDC '{self.udc}'...")
 
         try:
             os.makedirs(f"{GADGET_DIR}/strings/0x409", exist_ok=True)
@@ -142,18 +165,31 @@ class USBGadgetController:
             if not os.path.exists(link_target):
                 os.symlink(FUNC_DIR, link_target)
 
+            # Check if UDC is available
+            if not os.path.exists(f"/sys/class/udc/{self.udc}"):
+                available = [u for u in os.listdir("/sys/class/udc") if not u.startswith(".")] if os.path.exists("/sys/class/udc") else []
+                if available:
+                    self.udc = available[0]
+                else:
+                    self.error_message = "No UDC device found. Plug cable into right USB-C (OTG2/DC) port."
+                    print(f"[USBGadget] {self.error_message}")
+                    self.cleanup()
+                    return False
+
             # Bind UDC
             _write_file(f"{GADGET_DIR}/UDC", f"{self.udc}\n")
-            time.sleep(0.1)
+            time.sleep(0.15)
 
             # Wait for /dev/hidg0 to appear
-            for _ in range(30):
+            for _ in range(40):
                 if os.path.exists(DEV_HIDG):
                     break
                 time.sleep(0.05)
 
             if not os.path.exists(DEV_HIDG):
-                print(f"[USBGadget] Error: {DEV_HIDG} did not appear.")
+                self.error_message = f"Gadget bound to {self.udc} but {DEV_HIDG} node did not appear."
+                print(f"[USBGadget] Error: {self.error_message}")
+                self.cleanup()
                 return False
 
             self._dev_fd = os.open(DEV_HIDG, os.O_RDWR | os.O_NONBLOCK)
@@ -162,7 +198,8 @@ class USBGadgetController:
             return True
 
         except Exception as e:
-            print(f"[USBGadget] Failed to initialize gadget: {e}")
+            self.error_message = f"USB Gadget error: {e}"
+            print(f"[USBGadget] {self.error_message}")
             self.cleanup()
             return False
 

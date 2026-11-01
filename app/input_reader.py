@@ -136,7 +136,7 @@ class GamepadState:
         return s
 
 class InputReader:
-    def __init__(self, deadzone_percent: int = 8, grab_exclusive: bool = True, button_layout: str = "xbox"):
+    def __init__(self, deadzone_percent: int = 8, grab_exclusive: bool = False, button_layout: str = "xbox"):
         self.deadzone_percent = deadzone_percent
         self.deadzone_thresh = int(32767 * (deadzone_percent / 100.0))
         self.grab_exclusive = grab_exclusive

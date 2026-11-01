@@ -4,6 +4,7 @@ ControllerMode-MuOS - Main Application Entrypoint
 Coordinates UI, Input Capture, USB Gadget, Bluetooth Controllers, and In-App Updater.
 """
 import argparse
+import glob
 import os
 import signal
 import sys
@@ -80,14 +81,37 @@ class ControllerApp:
         )
         self.input = InputReader(
             deadzone_percent=self.config.get("deadzone_percent", 8),
-            grab_exclusive=True,
+            grab_exclusive=False,
             button_layout=self.config.get("button_layout", "xbox")
         )
         self.ui = UIRenderer()
         self.running = True
 
+        # Screen brightness preservation (prevents muOS idle dimming from sticking)
+        self.bl_paths = glob.glob("/sys/class/backlight/*/brightness")
+        self.initial_brightness = None
+        if self.bl_paths:
+            try:
+                with open(self.bl_paths[0], "r") as f:
+                    self.initial_brightness = int(f.read().strip())
+            except Exception:
+                pass
+
         signal.signal(signal.SIGINT, self._sig_handler)
         signal.signal(signal.SIGTERM, self._sig_handler)
+
+    def _keep_screen_alive(self):
+        """Restores screen brightness if muOS system dimmer dimmed it."""
+        if self.bl_paths and self.initial_brightness:
+            try:
+                for p in self.bl_paths:
+                    with open(p, "r") as f:
+                        cur = int(f.read().strip())
+                    if cur < self.initial_brightness:
+                        with open(p, "w") as f:
+                            f.write(f"{self.initial_brightness}\n")
+            except Exception:
+                pass
 
     def _sig_handler(self, sig, frame):
         self.running = False
@@ -113,6 +137,7 @@ class ControllerApp:
 
         while self.running:
             state = self.input.get_state()
+            self._keep_screen_alive()
 
             # Navigation
             if state.dpad_up and not last_dpad_up:
@@ -192,6 +217,7 @@ class ControllerApp:
 
         while self.running:
             state = self.input.get_state()
+            self._keep_screen_alive()
             btn_a = state.a and not last_a
             btn_b = (state.b and not last_b) or state.menu
             last_a = state.a
@@ -247,13 +273,24 @@ class ControllerApp:
             backend = USBGadgetController(mode=mode)
             mode_title = "USB: PC / Mac / Android" if mode == "usb_pc" else "USB: Nintendo Switch"
             if not backend.start():
-                print("[ControllerApp] Failed to start USB Gadget!")
+                err = getattr(backend, "error_message", "Could not initialize USB gadget.")
+                self.ui.render_modal_message("USB Mode Failed", f"{err}\n\nPlug cable into right port (OTG2/DC).", hint="[B] Close")
+                for _ in range(80):
+                    st = self.input.get_state()
+                    if st.a or st.b or st.menu or st.start:
+                        break
+                    time.sleep(0.05)
                 return
         else:
             backend = BluetoothController(mode=mode)
             mode_title = "Bluetooth: Xbox Wireless" if mode == "bt_ble" else "Bluetooth: Switch Pro"
             if not backend.start():
-                print("[ControllerApp] Failed to start Bluetooth!")
+                self.ui.render_modal_message("Bluetooth Failed", "Could not start Bluetooth stack.\nCheck Wi-Fi / BT toggle in muOS.", hint="[B] Close")
+                for _ in range(80):
+                    st = self.input.get_state()
+                    if st.a or st.b or st.menu or st.start:
+                        break
+                    time.sleep(0.05)
                 return
 
         self.rumble.pulse(150)
@@ -325,6 +362,13 @@ class ControllerApp:
 
     def cleanup(self):
         print("[ControllerApp] Performing final shutdown...")
+        if self.bl_paths and self.initial_brightness:
+            try:
+                for p in self.bl_paths:
+                    with open(p, "w") as f:
+                        f.write(f"{self.initial_brightness}\n")
+            except Exception:
+                pass
         self.input.stop()
         self.rumble.close()
         self.ui.close()
