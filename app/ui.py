@@ -56,26 +56,45 @@ class UIRenderer:
         sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO | sdl2.SDL_INIT_EVENTS)
         ttf.TTF_Init()
 
+        sdl2.SDL_SetHint(sdl2.SDL_HINT_RENDER_SCALE_QUALITY, b"1")
+        flags = sdl2.SDL_WINDOW_SHOWN
+        if not os.environ.get("GM_WINDOWED"):
+            flags |= sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
+
         self.window = sdl2.SDL_CreateWindow(
             b"ControllerMode-MuOS",
-            sdl2.SDL_WINDOWPOS_CENTERED,
-            sdl2.SDL_WINDOWPOS_CENTERED,
+            sdl2.SDL_WINDOWPOS_UNDEFINED,
+            sdl2.SDL_WINDOWPOS_UNDEFINED,
             SCREEN_W,
             SCREEN_H,
-            sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_FULLSCREEN
+            flags
         )
-        self.renderer = sdl2.SDL_CreateRenderer(
-            self.window, -1, sdl2.SDL_RENDERER_ACCELERATED | sdl2.SDL_RENDERER_PRESENTVSYNC
-        )
+        if not self.window:
+            print(f"[UI] Warning: SDL_CreateWindow failed: {sdl2.SDL_GetError()}")
+            return
 
+        self.renderer = sdl2.SDL_CreateRenderer(self.window, -1, sdl2.SDL_RENDERER_ACCELERATED)
+        if not self.renderer:
+            self.renderer = sdl2.SDL_CreateRenderer(self.window, -1, sdl2.SDL_RENDERER_SOFTWARE)
+        if not self.renderer:
+            print(f"[UI] Warning: SDL_CreateRenderer failed: {sdl2.SDL_GetError()}")
+            return
+
+        sdl2.SDL_RenderSetLogicalSize(self.renderer, SCREEN_W, SCREEN_H)
+        sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
+
+        # Prioritize bundled font
+        app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         font_paths = [
+            os.path.join(app_root, "assets", "font.ttf"),
+            "/opt/muos/share/font/muterm.ttf",
             "/opt/muos/share/theme/MustardOS/font/source.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
         ]
         chosen_font = None
         for p in font_paths:
-            if os.path.exists(p):
+            if os.path.exists(p) and os.path.getsize(p) > 1000:
                 chosen_font = p.encode("utf-8")
                 break
 

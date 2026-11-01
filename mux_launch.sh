@@ -24,7 +24,7 @@ export PYTHONDONTWRITEBYTECODE=1
 
 # Restart loop for in-app updates (exit code 42 means an update finished and app needs restart)
 while :; do
-	python3 -u "$APP_DIR/app/main.py" "$@" >/tmp/controllermode.log 2>&1
+	python3 -u "$APP_DIR/app/main.py" >/tmp/controllermode.log 2>&1
 	EXIT_STATUS=$?
 	[ "$EXIT_STATUS" -eq 42 ] || break
 done

@@ -312,7 +312,8 @@ class ControllerApp:
 def main():
     parser = argparse.ArgumentParser(description="ControllerMode-MuOS")
     parser.add_argument("--mode", choices=["usb_pc", "usb_switch", "bt_ble", "bt_switch"], help="Direct launch into mode")
-    args = parser.parse_args()
+    parser.add_argument("extra_args", nargs="*", help="muOS launch arguments")
+    args, _ = parser.parse_known_args()
 
     app = ControllerApp(cli_mode=args.mode)
     app.run()
