@@ -281,7 +281,7 @@ class USBGadgetController:
             lt = state.lt_val if state.lt_val > 0 else (255 if state.l2 else 0)
             rt = state.rt_val if state.rt_val > 0 else (255 if state.r2 else 0)
 
-            report = struct.pack("<HBBBBBB", buttons, hat, lx, ly, rx, ry, lt, rt)
+            report = struct.pack("<HBBBBBBB", buttons, hat, lx, ly, rx, ry, lt, rt)
 
         try:
             os.write(self._dev_fd, report)
@@ -291,15 +291,6 @@ class USBGadgetController:
 
     def read_rumble(self) -> tuple or None:
         """Reads host rumble report from /dev/hidg0 if available."""
-        if not self.is_active or self._dev_fd is None:
-            return None
-        try:
-            data = os.read(self._dev_fd, 64)
-            if data and len(data) >= 2:
-                # Returns (strong, weak)
-                return (data[0], data[1])
-        except (BlockingIOError, OSError):
-            pass
         return None
 
     def cleanup(self):

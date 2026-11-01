@@ -6,6 +6,7 @@ with an auto-approving pairing agent to handle PIN/passkey requests automaticall
 """
 import fcntl
 import os
+import pty
 import re
 import struct
 import subprocess
@@ -136,31 +137,33 @@ class BluetoothController:
         return True
 
     def _setup_agent(self):
-        """Registers the auto-pairing agent via D-Bus and CLI."""
-        # 1. Shell agent that interacts with bluetoothctl prompts non-blockingly
+        """Registers the auto-pairing agent via D-Bus and CLI PTY."""
         def _cli_agent():
+            master_fd, slave_fd = None, None
+            p = None
             try:
+                master_fd, slave_fd = pty.openpty()
+                fl = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+                fcntl.fcntl(master_fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
                 p = subprocess.Popen(
                     ["bluetoothctl"],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=0
+                    stdin=slave_fd,
+                    stdout=slave_fd,
+                    stderr=slave_fd,
+                    close_fds=True
                 )
-                # Set non-blocking on stdout
-                fd = p.stdout.fileno()
-                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+                os.close(slave_fd)
+                slave_fd = None
 
                 def _send(cmd: str):
                     try:
-                        p.stdin.write(cmd.encode("utf-8") + b"\n")
-                        p.stdin.flush()
+                        os.write(master_fd, cmd.encode("utf-8") + b"\n")
                     except Exception:
                         pass
 
                 _send("power on")
-                _send("agent NoInputNoOutput")
+                _send("agent DisplayYesNo")
                 _send("default-agent")
                 _send("discoverable on")
                 _send("pairable on")
@@ -168,29 +171,43 @@ class BluetoothController:
                 buf = b""
                 while not self._stop_event.is_set():
                     try:
-                        chunk = os.read(fd, 1024)
+                        chunk = os.read(master_fd, 1024)
                         if chunk:
                             buf += chunk
                             text = buf.decode("utf-8", errors="ignore")
-                            # Check for passkey / authorization prompts
-                            if any(k in text.lower() for k in ["(yes/no)", "confirm passkey", "authorize service", "authorize connection"]):
-                                _send("yes")
+                            # Check for 6-digit numeric comparison passkey
+                            m = re.search(r'(?:passkey|code|pin)\s*:?\s*(\d{6})', text, re.I)
+                            if not m:
                                 m = re.search(r'\b(\d{6})\b', text)
-                                if m:
-                                    self.current_passkey = m.group(1)
+                            if m:
+                                self.current_passkey = m.group(1)
+
+                            # Auto-confirm passkey / authorization prompts
+                            if any(k in text.lower() for k in ["(yes/no)", "confirm passkey", "authorize service", "authorize connection", "accept"]):
+                                _send("yes")
                                 buf = b""
                             elif "pin" in text.lower() and "?" in text:
                                 _send("0000")
                                 buf = b""
-                            elif "passkey" in text.lower() and "?" in text:
-                                _send("000000")
-                                buf = b""
                     except (BlockingIOError, InterruptedError):
                         pass
                     time.sleep(0.05)
-                p.terminate()
-            except Exception:
-                pass
+
+                if p:
+                    p.terminate()
+            except Exception as e:
+                print(f"[Bluetooth] CLI PTY agent error: {e}")
+            finally:
+                if slave_fd is not None:
+                    try:
+                        os.close(slave_fd)
+                    except Exception:
+                        pass
+                if master_fd is not None:
+                    try:
+                        os.close(master_fd)
+                    except Exception:
+                        pass
 
         threading.Thread(target=_cli_agent, daemon=True).start()
 
