@@ -4,7 +4,9 @@ ControllerMode-MuOS - Bluetooth Controller Engine
 Supports Bluetooth LE (Xbox Wireless Controller / BLE Gamepad) & Classic Bluetooth
 with an auto-approving pairing agent to handle PIN/passkey requests automatically.
 """
+import fcntl
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -135,7 +137,7 @@ class BluetoothController:
 
     def _setup_agent(self):
         """Registers the auto-pairing agent via D-Bus and CLI."""
-        # 1. Shell agent that interacts with bluetoothctl prompts
+        # 1. Shell agent that interacts with bluetoothctl prompts non-blockingly
         def _cli_agent():
             try:
                 p = subprocess.Popen(
@@ -143,30 +145,49 @@ class BluetoothController:
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1
+                    bufsize=0
                 )
-                p.stdin.write("agent NoInputNoOutput\n")
-                p.stdin.write("default-agent\n")
-                p.stdin.write("discoverable on\n")
-                p.stdin.write("pairable on\n")
-                p.stdin.flush()
+                # Set non-blocking on stdout
+                fd = p.stdout.fileno()
+                fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+                fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
+                def _send(cmd: str):
+                    try:
+                        p.stdin.write(cmd.encode("utf-8") + b"\n")
+                        p.stdin.flush()
+                    except Exception:
+                        pass
+
+                _send("power on")
+                _send("agent NoInputNoOutput")
+                _send("default-agent")
+                _send("discoverable on")
+                _send("pairable on")
+
+                buf = b""
                 while not self._stop_event.is_set():
-                    line = p.stdout.readline()
-                    if not line:
-                        break
-                    line_str = line.strip()
-                    # Auto-reply 'yes' to any authorization, passkey confirmation, or pin prompt
-                    if any(w in line_str for w in ["(yes/no)", "Confirm passkey", "Authorize service", "Authorize connection"]):
-                        p.stdin.write("yes\n")
-                        p.stdin.flush()
-                    elif "PIN code" in line_str or "Enter PIN" in line_str:
-                        p.stdin.write("0000\n")
-                        p.stdin.flush()
-                    elif "Passkey" in line_str:
-                        p.stdin.write("000000\n")
-                        p.stdin.flush()
+                    try:
+                        chunk = os.read(fd, 1024)
+                        if chunk:
+                            buf += chunk
+                            text = buf.decode("utf-8", errors="ignore")
+                            # Check for passkey / authorization prompts
+                            if any(k in text.lower() for k in ["(yes/no)", "confirm passkey", "authorize service", "authorize connection"]):
+                                _send("yes")
+                                m = re.search(r'\b(\d{6})\b', text)
+                                if m:
+                                    self.current_passkey = m.group(1)
+                                buf = b""
+                            elif "pin" in text.lower() and "?" in text:
+                                _send("0000")
+                                buf = b""
+                            elif "passkey" in text.lower() and "?" in text:
+                                _send("000000")
+                                buf = b""
+                    except (BlockingIOError, InterruptedError):
+                        pass
+                    time.sleep(0.05)
                 p.terminate()
             except Exception:
                 pass

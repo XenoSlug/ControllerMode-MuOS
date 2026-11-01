@@ -115,9 +115,25 @@ class USBGadgetController:
         self.cleanup()
         self.error_message = ""
 
-        # 1. Modprobe required gadget modules on Linux/muOS
-        for mod in ["libcomposite", "usb_f_hid", "sunxi-musb"]:
-            subprocess.run(["modprobe", mod], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 1. Ensure kernel module usb_f_hid is loaded on Linux/muOS
+        is_hid_loaded = False
+        try:
+            with open("/proc/modules", "r") as f:
+                if "usb_f_hid" in f.read():
+                    is_hid_loaded = True
+        except Exception:
+            pass
+
+        if not is_hid_loaded:
+            # Try modprobe first
+            subprocess.run(["modprobe", "libcomposite"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["modprobe", "usb_f_hid"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # If still not loaded, insmod our bundled kernel module built for H700 muOS
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+            ko_path = os.path.join(app_dir, "kernel", "usb_f_hid.ko")
+            if os.path.isfile(ko_path):
+                subprocess.run(["insmod", ko_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.2)
 
         # 2. Ensure configfs is mounted
         if not os.path.ismount("/sys/kernel/config"):
@@ -171,7 +187,7 @@ class USBGadgetController:
                 if available:
                     self.udc = available[0]
                 else:
-                    self.error_message = "No UDC device found. Plug cable into right USB-C (OTG2/DC) port."
+                    self.error_message = "No UDC device found.\nPlug cable into right USB-C (OTG2/DC) port."
                     print(f"[USBGadget] {self.error_message}")
                     self.cleanup()
                     return False
@@ -187,7 +203,7 @@ class USBGadgetController:
                 time.sleep(0.05)
 
             if not os.path.exists(DEV_HIDG):
-                self.error_message = f"Gadget bound to {self.udc} but {DEV_HIDG} node did not appear."
+                self.error_message = f"Gadget bound to {self.udc}\nbut {DEV_HIDG} node did not appear."
                 print(f"[USBGadget] Error: {self.error_message}")
                 self.cleanup()
                 return False

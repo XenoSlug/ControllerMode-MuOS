@@ -274,23 +274,42 @@ class ControllerApp:
             mode_title = "USB: PC / Mac / Android" if mode == "usb_pc" else "USB: Nintendo Switch"
             if not backend.start():
                 err = getattr(backend, "error_message", "Could not initialize USB gadget.")
-                self.ui.render_modal_message("USB Mode Failed", f"{err}\n\nPlug cable into right port (OTG2/DC).", hint="[B] Close")
-                for _ in range(80):
+                # Debounce: wait for button release
+                for _ in range(50):
                     st = self.input.get_state()
-                    if st.a or st.b or st.menu or st.start:
+                    if not st.a and not st.b and not st.raw_a and not st.raw_b and not st.start and not st.menu:
                         break
-                    time.sleep(0.05)
+                    time.sleep(0.02)
+
+                start_m = time.monotonic()
+                while self.running:
+                    st = self.input.get_state()
+                    elapsed = time.monotonic() - start_m
+                    hint = "[B] Close" if elapsed >= 1.5 else ""
+                    self.ui.render_modal_message("USB Mode Failed", f"{err}\n\nPlug cable into right port (OTG2/DC).", hint=hint)
+                    if (elapsed >= 1.5 and (st.b or st.raw_b or st.a or st.raw_a or st.menu)) or elapsed >= 8.0:
+                        break
+                    time.sleep(0.03)
                 return
         else:
             backend = BluetoothController(mode=mode)
             mode_title = "Bluetooth: Xbox Wireless" if mode == "bt_ble" else "Bluetooth: Switch Pro"
             if not backend.start():
-                self.ui.render_modal_message("Bluetooth Failed", "Could not start Bluetooth stack.\nCheck Wi-Fi / BT toggle in muOS.", hint="[B] Close")
-                for _ in range(80):
+                for _ in range(50):
                     st = self.input.get_state()
-                    if st.a or st.b or st.menu or st.start:
+                    if not st.a and not st.b and not st.raw_a and not st.raw_b and not st.start and not st.menu:
                         break
-                    time.sleep(0.05)
+                    time.sleep(0.02)
+
+                start_m = time.monotonic()
+                while self.running:
+                    st = self.input.get_state()
+                    elapsed = time.monotonic() - start_m
+                    hint = "[B] Close" if elapsed >= 1.5 else ""
+                    self.ui.render_modal_message("Bluetooth Failed", "Could not start Bluetooth stack.\nCheck Wi-Fi / BT toggle in muOS.", hint=hint)
+                    if (elapsed >= 1.5 and (st.b or st.raw_b or st.a or st.raw_a or st.menu)) or elapsed >= 8.0:
+                        break
+                    time.sleep(0.03)
                 return
 
         self.rumble.pulse(150)
