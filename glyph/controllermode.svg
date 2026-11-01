@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <path d="M5.5 6h13A3.5 3.5 0 0 1 22 9.5v5A3.5 3.5 0 0 1 18.5 18H5.5A3.5 3.5 0 0 1 2 14.5v-5A3.5 3.5 0 0 1 5.5 6z" fill="#FFFFFF" opacity="0.2"/>
+  <path d="M5.5 6h13A3.5 3.5 0 0 1 22 9.5v5A3.5 3.5 0 0 1 18.5 18H5.5A3.5 3.5 0 0 1 2 14.5v-5A3.5 3.5 0 0 1 5.5 6z" fill="none" stroke="#FFFFFF" stroke-width="1.6"/>
+  <!-- D-Pad -->
+  <path d="M6 12h4M8 10v4" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- Action Buttons -->
+  <circle cx="16" cy="10.5" r="0.9" fill="#FFFFFF"/>
+  <circle cx="18" cy="12" r="0.9" fill="#FFFFFF"/>
+  <circle cx="16" cy="13.5" r="0.9" fill="#FFFFFF"/>
+  <circle cx="14" cy="12" r="0.9" fill="#FFFFFF"/>
+  <!-- Center Screen / Indicators -->
+  <rect x="10.5" y="11" width="3" height="2" rx="0.5" fill="#FFFFFF" opacity="0.8"/>
+</svg>

@@ -291,8 +291,11 @@ class ControllerApp:
                     elif now - last_activity > saver_timeout and not is_dark:
                         is_dark = True
 
+                passkey = getattr(backend, "current_passkey", None)
+                host_name = getattr(backend, "host_name", None)
+
                 if not is_dark or (report_count % 30 == 0):
-                    self.ui.render_active_screen(mode_title, state, reports_per_sec, is_dark)
+                    self.ui.render_active_screen(mode_title, state, reports_per_sec, is_dark, passkey=passkey, host_name=host_name)
 
                 time.sleep(0.004)
 

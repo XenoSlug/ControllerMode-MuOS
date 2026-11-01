@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ControllerMode-MuOS - PySDL2 UI & Live Status Screen
-Renders menu, real-time controller status with pixel art, and updater dialogs on 640x480 display.
+Renders scrollable menu, real-time controller status with pixel art, and pairing codes on 640x480 display.
 """
 import ctypes
 import os
@@ -37,6 +37,8 @@ C_ACTIVE_BTN= (255, 80, 80)
 C_BORDER    = (60, 68, 82)
 C_GREEN     = (46, 180, 80)
 
+MAX_VISIBLE_ITEMS = 5
+
 class UIRenderer:
     def __init__(self):
         self.window = None
@@ -45,6 +47,7 @@ class UIRenderer:
         self.font_small = None
         self.font_large = None
         self.initialized = False
+        self.scroll_offset = 0
         self._init_sdl()
 
     def _init_sdl(self):
@@ -83,7 +86,6 @@ class UIRenderer:
         sdl2.SDL_RenderSetLogicalSize(self.renderer, SCREEN_W, SCREEN_H)
         sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
 
-        # Prioritize bundled font
         app_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         font_paths = [
             os.path.join(app_root, "assets", "font.ttf"),
@@ -159,55 +161,68 @@ class UIRenderer:
         if not self.initialized:
             return
 
+        # Keep selected item inside visible window
+        if selected_index < self.scroll_offset:
+            self.scroll_offset = selected_index
+        elif selected_index >= self.scroll_offset + MAX_VISIBLE_ITEMS:
+            self.scroll_offset = selected_index - MAX_VISIBLE_ITEMS + 1
+
         self.draw_rect(0, 0, SCREEN_W, SCREEN_H, C_BG)
 
         # Header banner
-        self.draw_rect(0, 0, SCREEN_W, 60, C_PANEL)
-        self.draw_rect(0, 59, SCREEN_W, 2, C_ACCENT)
-        self.draw_text("ControllerMode-MuOS", SCREEN_W // 2, 12, C_WHITE, "large", center_x=True)
-        self.draw_text("Turn RG35XX H into a USB & Bluetooth Gamepad", SCREEN_W // 2, 38, C_GRAY, "small", center_x=True)
+        self.draw_rect(0, 0, SCREEN_W, 58, C_PANEL)
+        self.draw_rect(0, 57, SCREEN_W, 2, C_ACCENT)
+        self.draw_text("ControllerMode-MuOS", SCREEN_W // 2, 10, C_WHITE, "large", center_x=True)
+        self.draw_text("Turn RG35XX H into a USB & Bluetooth Gamepad", SCREEN_W // 2, 36, C_GRAY, "small", center_x=True)
 
-        # Update notice if available
+        start_y = 66
+        card_h = 56
+        gap = 10
+
+        # Update badge
         if update_status:
-            self.draw_rect(40, 68, SCREEN_W - 80, 24, (25, 45, 35), fill=True)
-            self.draw_rect(40, 68, SCREEN_W - 80, 24, C_GREEN, fill=False)
-            self.draw_text(update_status, SCREEN_W // 2, 73, C_GREEN, "small", center_x=True)
-            start_y = 100
-            card_h = 44
-            gap = 6
-        else:
-            start_y = 76
-            card_h = 46
+            self.draw_rect(36, 62, SCREEN_W - 72, 22, (25, 45, 35), fill=True)
+            self.draw_rect(36, 62, SCREEN_W - 72, 22, C_GREEN, fill=False)
+            self.draw_text(update_status, SCREEN_W // 2, 66, C_GREEN, "small", center_x=True)
+            start_y = 90
+            card_h = 52
             gap = 8
 
-        # Render menu items
-        for i, item in enumerate(items):
-            y = start_y + i * (card_h + gap)
-            if y + card_h > SCREEN_H - 42:
-                break
+        # Render visible slice of items
+        visible_indices = range(self.scroll_offset, min(len(items), self.scroll_offset + MAX_VISIBLE_ITEMS))
+
+        for slot, i in enumerate(visible_indices):
+            y = start_y + slot * (card_h + gap)
             is_sel = (i == selected_index)
 
             bg_col = (36, 44, 58) if is_sel else C_PANEL
             border_col = C_ACCENT if is_sel else C_BORDER
 
-            self.draw_rect(40, y, SCREEN_W - 80, card_h, bg_col, fill=True)
-            self.draw_rect(40, y, SCREEN_W - 80, card_h, border_col, fill=False)
+            self.draw_rect(36, y, SCREEN_W - 72, card_h, bg_col, fill=True)
+            self.draw_rect(36, y, SCREEN_W - 72, card_h, border_col, fill=False)
 
             if is_sel:
-                self.draw_rect(40, y, 6, card_h, C_ACCENT, fill=True)
+                self.draw_rect(36, y, 6, card_h, C_ACCENT, fill=True)
 
             title_col = C_WHITE if is_sel else (200, 205, 215)
-            self.draw_text(item["title"], 60, y + 6, title_col, "normal")
-            self.draw_text(item["desc"], 60, y + 26, C_GRAY, "small")
+            self.draw_text(items[i]["title"], 56, y + 8, title_col, "normal")
+            self.draw_text(items[i]["desc"], 56, y + 30, C_GRAY, "small")
 
             if is_sel:
-                self.draw_text("►", SCREEN_W - 65, y + 14, C_ACCENT, "normal")
+                self.draw_text("►", SCREEN_W - 60, y + 16, C_ACCENT, "normal")
+
+        # Scroll indicator arrows if more items exist above or below
+        if self.scroll_offset > 0:
+            self.draw_text("▲", SCREEN_W - 20, start_y + 4, C_ACCENT, "small", center_x=True)
+        if self.scroll_offset + MAX_VISIBLE_ITEMS < len(items):
+            self.draw_text("▼", SCREEN_W - 20, start_y + (MAX_VISIBLE_ITEMS * (card_h + gap)) - 20, C_ACCENT, "small", center_x=True)
 
         # Bottom info bar
-        self.draw_rect(0, SCREEN_H - 38, SCREEN_W, 38, C_PANEL)
-        self.draw_rect(0, SCREEN_H - 39, SCREEN_W, 1, C_BORDER)
-        help_text = f"Layout: {layout_name.upper()}  |  Saver: {'ON' if saver_on else 'OFF'}  |  [A] Select  [START] Launch"
-        self.draw_text(help_text, SCREEN_W // 2, SCREEN_H - 26, C_GRAY, "small", center_x=True)
+        self.draw_rect(0, SCREEN_H - 36, SCREEN_W, 36, C_PANEL)
+        self.draw_rect(0, SCREEN_H - 37, SCREEN_W, 1, C_BORDER)
+        item_counter = f"[{selected_index + 1}/{len(items)}]"
+        help_text = f"Layout: {layout_name.upper()}  |  Saver: {'ON' if saver_on else 'OFF'}  |  {item_counter}  [A] Select  [START] Launch"
+        self.draw_text(help_text, SCREEN_W // 2, SCREEN_H - 24, C_GRAY, "small", center_x=True)
 
         sdl2.SDL_RenderPresent(self.renderer)
 
@@ -215,10 +230,8 @@ class UIRenderer:
         if not self.initialized:
             return
 
-        # Dim background
         self.draw_rect(0, 0, SCREEN_W, SCREEN_H, (10, 12, 16))
 
-        # Dialog Box
         dw, dh = 480, 220
         dx, dy = (SCREEN_W - dw) // 2, (SCREEN_H - dh) // 2
 
@@ -228,7 +241,6 @@ class UIRenderer:
         self.draw_text(title, SCREEN_W // 2, dy + 20, C_WHITE, "large", center_x=True)
         self.draw_text(message, SCREEN_W // 2, dy + 70, C_WHITE, "normal", center_x=True)
 
-        # Progress bar if downloading
         if progress is not None:
             pb_w = 360
             pb_h = 16
@@ -246,7 +258,7 @@ class UIRenderer:
 
         sdl2.SDL_RenderPresent(self.renderer)
 
-    def render_active_screen(self, mode_title: str, state, reports_per_sec: int, is_dark: bool = False):
+    def render_active_screen(self, mode_title: str, state, reports_per_sec: int, is_dark: bool = False, passkey: str = None, host_name: str = None):
         if not self.initialized:
             return
 
@@ -275,9 +287,22 @@ class UIRenderer:
         self.draw_rect(sx, sy, sw, sh, (14, 16, 20), fill=True)
         self.draw_rect(sx, sy, sw, sh, C_BORDER, fill=False)
 
-        self.draw_text("CONNECTED", sx + sw // 2, sy + 40, C_ACTIVE, "normal", center_x=True)
-        self.draw_text("Controls forwarded to Host", sx + sw // 2, sy + 75, C_GRAY, "small", center_x=True)
-        self.draw_text("OTG2/DC: Charging & Active", sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
+        # Pairing Code Banner if Bluetooth host requested passkey comparison
+        if passkey:
+            self.draw_text("PAIRING REQUEST", sx + sw // 2, sy + 25, C_ACCENT2, "normal", center_x=True)
+            code_text = f"Code: {passkey}"
+            self.draw_text(code_text, sx + sw // 2, sy + 55, C_WHITE, "large", center_x=True)
+            self.draw_text("Auto-Accepted!", sx + sw // 2, sy + 90, C_ACTIVE, "small", center_x=True)
+            self.draw_text("Confirm on PC screen", sx + sw // 2, sy + 115, C_GRAY, "small", center_x=True)
+        else:
+            conn_txt = "CONNECTED" if (host_name and "Waiting" not in host_name) else "READY TO CONNECT"
+            conn_col = C_ACTIVE if conn_txt == "CONNECTED" else C_ACCENT2
+            self.draw_text(conn_txt, sx + sw // 2, sy + 40, conn_col, "normal", center_x=True)
+            if host_name:
+                self.draw_text(host_name[:24], sx + sw // 2, sy + 75, C_WHITE, "small", center_x=True)
+            else:
+                self.draw_text("Controls forwarded to Host", sx + sw // 2, sy + 75, C_GRAY, "small", center_x=True)
+            self.draw_text("OTG2/DC: Charging & Active", sx + sw // 2, sy + 105, (180, 200, 220), "small", center_x=True)
 
         # Shoulders
         col_l1 = C_ACTIVE if state.l1 else C_DARKGRAY

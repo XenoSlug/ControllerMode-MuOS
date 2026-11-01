@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 ControllerMode-MuOS - Bluetooth Controller Engine
-Supports Bluetooth LE (Xbox Wireless Controller / BLE Gamepad) & Classic Bluetooth.
+Supports Bluetooth LE (Xbox Wireless Controller / BLE Gamepad) & Classic Bluetooth
+with an auto-approving pairing agent to handle PIN/passkey requests automatically.
 """
 import os
 import struct
@@ -9,10 +10,18 @@ import subprocess
 import threading
 import time
 
+try:
+    import dbus
+    import dbus.mainloop.glib
+    import dbus.service
+    HAS_DBUS = True
+except ImportError:
+    HAS_DBUS = False
+
 BLUEZ_SERVICE = "org.bluez"
-ADAPTER_IFACE = "org.bluez.Adapter1"
-GATT_MGR = "org.bluez.GattManager1"
-ADV_MGR = "org.bluez.LEAdvertisingManager1"
+AGENT_PATH = "/org/muos/controllermode/agent"
+AGENT_IFACE = "org.bluez.Agent1"
+AGENT_MGR = "org.bluez.AgentManager1"
 
 # Xbox Wireless Controller BLE Report Descriptor (Model 1914)
 XBOX_REPORT_MAP = bytes.fromhex(
@@ -24,36 +33,85 @@ XBOX_REPORT_MAP = bytes.fromhex(
     "150026ff0075089501910209a7150026ff0075089501910265005500097c150026ff00750895019102c0c0"
 )
 
-# Generic Bluetooth HID Report Map (Report ID 1)
-GENERIC_REPORT_MAP = bytes([
-    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
-    0x85, 0x01,
-    0x05, 0x09, 0x19, 0x01, 0x29, 0x10,
-    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x10, 0x81, 0x02,
-    0x05, 0x01, 0x09, 0x39,
-    0x15, 0x00, 0x25, 0x07, 0x35, 0x00, 0x46, 0x3B, 0x01, 0x65, 0x14,
-    0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
-    0x75, 0x04, 0x95, 0x01, 0x81, 0x03, 0x65, 0x00,
-    0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
-    0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
-    0x09, 0x33, 0x09, 0x34,
-    0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
-    0xC0,
-])
+if HAS_DBUS:
+    class AutoPairingAgent(dbus.service.Object):
+        """Auto-approves incoming pairing and passkey confirmation requests from PC/Phone."""
+        def __init__(self, bus, controller):
+            dbus.service.Object.__init__(self, bus, AGENT_PATH)
+            self._bus = bus
+            self.controller = controller
 
-XBOX_HAT = {
-    (0, -1): 1, (1, -1): 2, (1, 0): 3, (1, 1): 4,
-    (0, 1): 5, (-1, 1): 6, (-1, 0): 7, (-1, -1): 8, (0, 0): 0
-}
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Release(self):
+            pass
+
+        @dbus.service.method(AGENT_IFACE, in_signature="s", out_signature="s")
+        def RequestPinCode(self, device):
+            print(f"[BluetoothAgent] RequestPinCode for {device} -> returning 0000")
+            return "0000"
+
+        @dbus.service.method(AGENT_IFACE, in_signature="s", out_signature="u")
+        def RequestPasskey(self, device):
+            print(f"[BluetoothAgent] RequestPasskey for {device} -> returning 0")
+            return dbus.UInt32(0)
+
+        @dbus.service.method(AGENT_IFACE, in_signature="ss", out_signature="")
+        def DisplayPinCode(self, device, pincode):
+            print(f"[BluetoothAgent] DisplayPinCode: {pincode}")
+
+        @dbus.service.method(AGENT_IFACE, in_signature="uuu", out_signature="")
+        def DisplayPasskey(self, device, passkey, entered):
+            self.controller.current_passkey = f"{passkey:06d}"
+            print(f"[BluetoothAgent] DisplayPasskey: {passkey:06d}")
+
+        @dbus.service.method(AGENT_IFACE, in_signature="su", out_signature="")
+        def RequestConfirmation(self, device, passkey):
+            self.controller.current_passkey = f"{passkey:06d}"
+            print(f"[BluetoothAgent] RequestConfirmation for {device} passkey={passkey:06d} -> Auto-Accepting")
+            self._trust_device(device)
+            return
+
+        @dbus.service.method(AGENT_IFACE, in_signature="s", out_signature="")
+        def RequestAuthorization(self, device):
+            print(f"[BluetoothAgent] RequestAuthorization for {device} -> Auto-Accepting")
+            self._trust_device(device)
+            return
+
+        @dbus.service.method(AGENT_IFACE, in_signature="ss", out_signature="")
+        def AuthorizeService(self, device, uuid):
+            print(f"[BluetoothAgent] AuthorizeService for {device} uuid={uuid} -> Allowing")
+            self._trust_device(device)
+            return
+
+        @dbus.service.method(AGENT_IFACE, in_signature="", out_signature="")
+        def Cancel(self):
+            print("[BluetoothAgent] Pairing cancelled")
+            self.controller.current_passkey = None
+
+        def _trust_device(self, device_path):
+            try:
+                props = dbus.Interface(
+                    self._bus.get_object("org.bluez", device_path),
+                    "org.freedesktop.DBus.Properties"
+                )
+                props.Set("org.bluez.Device1", "Trusted", dbus.Boolean(True, variant_level=1))
+                print(f"[BluetoothAgent] Marked {device_path} as Trusted=True")
+            except Exception as e:
+                pass
+else:
+    AutoPairingAgent = None
 
 class BluetoothController:
     def __init__(self, mode: str = "bt_ble"):
-        self.mode = mode  # "bt_ble" or "bt_switch"
+        self.mode = mode
         self.is_connected = False
         self.is_active = False
+        self.host_name = "Waiting for host..."
+        self.current_passkey = None
         self._thread = None
         self._stop_event = threading.Event()
-        self.host_name = "Not Connected"
+        self._agent = None
+        self._bus = None
 
     def check_stack(self) -> bool:
         """Ensures bluetoothd is running on muOS."""
@@ -63,23 +121,61 @@ class BluetoothController:
             if os.path.exists("/opt/muos/script/init/S75bluetooth.sh"):
                 subprocess.run(["/opt/muos/script/init/S75bluetooth.sh", "start"])
                 time.sleep(1.5)
-        # Power on
         subprocess.run(["bluetoothctl", "power", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.5)
         return True
+
+    def _setup_agent(self):
+        """Registers the auto-pairing agent via D-Bus and CLI."""
+        # 1. Shell agent as fallback
+        def _cli_agent():
+            try:
+                # Tell bluetoothctl to run NoInputNoOutput default agent
+                p = subprocess.Popen(
+                    ["bluetoothctl"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                p.stdin.write("agent NoInputNoOutput\ndefault-agent\ndiscoverable on\npairable on\n")
+                p.stdin.flush()
+                while not self._stop_event.is_set():
+                    time.sleep(0.5)
+                p.terminate()
+            except Exception:
+                pass
+
+        threading.Thread(target=_cli_agent, daemon=True).start()
+
+        # 2. D-Bus agent if available
+        if HAS_DBUS and AutoPairingAgent:
+            try:
+                import dbus.mainloop.glib
+                dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+                self._bus = dbus.SystemBus()
+                self._agent = AutoPairingAgent(self._bus, self)
+                manager = dbus.Interface(
+                    self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"),
+                    AGENT_MGR
+                )
+                manager.RegisterAgent(AGENT_PATH, "DisplayYesNo")
+                manager.RequestDefaultAgent(AGENT_PATH)
+                print("[Bluetooth] Auto-approving D-Bus agent registered successfully.")
+            except Exception as e:
+                print(f"[Bluetooth] Note: D-Bus agent setup skipped ({e}), using bluetoothctl agent.")
 
     def start(self) -> bool:
         """Starts Bluetooth Gamepad service."""
         self.check_stack()
         self.is_active = True
         self._stop_event.clear()
-
-        # Set discoverable and pairable
-        subprocess.run(["bluetoothctl", "discoverable", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["bluetoothctl", "pairable", "on"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.current_passkey = None
 
         name = "RG35XX-H (Xbox)" if self.mode == "bt_ble" else "Pro Controller"
         subprocess.run(["bluetoothctl", "system-alias", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        self._setup_agent()
 
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
@@ -93,13 +189,15 @@ class BluetoothController:
                 out = subprocess.check_output(["bluetoothctl", "info"], stderr=subprocess.DEVNULL).decode()
                 if "Connected: yes" in out:
                     self.is_connected = True
+                    self.current_passkey = None
                     for line in out.splitlines():
                         if "Name:" in line or "Alias:" in line:
                             self.host_name = line.split(":", 1)[1].strip()
                             break
                 else:
                     self.is_connected = False
-                    self.host_name = "Waiting for host..."
+                    if not self.current_passkey:
+                        self.host_name = "Waiting for host..."
             except Exception:
                 self.is_connected = False
             time.sleep(1.0)
@@ -108,12 +206,21 @@ class BluetoothController:
         """Sends GamepadState over Bluetooth link."""
         if not self.is_active or not self.is_connected:
             return False
-        # Report sending handled via GATT notification or L2CAP channel
         return True
 
     def cleanup(self):
         """Cleanly shuts down Bluetooth gamepad advertisement."""
         self.is_active = False
         self._stop_event.set()
+        self.current_passkey = None
         subprocess.run(["bluetoothctl", "discoverable", "off"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if self._bus and self._agent:
+            try:
+                manager = dbus.Interface(
+                    self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"),
+                    AGENT_MGR
+                )
+                manager.UnregisterAgent(AGENT_PATH)
+            except Exception:
+                pass
         print("[Bluetooth] Bluetooth Controller stopped.")
