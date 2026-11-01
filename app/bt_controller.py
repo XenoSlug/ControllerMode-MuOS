@@ -34,6 +34,8 @@ BLUEZ_SERVICE = "org.bluez"
 AGENT_PATH = "/org/muos/controllermode/agent"
 AGENT_IFACE = "org.bluez.Agent1"
 AGENT_MGR = "org.bluez.AgentManager1"
+PROFILE_PATH = "/org/muos/controllermode/profile"
+HID_PROFILE_UUID = "00001124-0000-1000-8000-00805f9b34fb"
 OM_IFACE = "org.freedesktop.DBus.ObjectManager"
 PROP_IFACE = "org.freedesktop.DBus.Properties"
 GATT_MGR = "org.bluez.GattManager1"
@@ -118,6 +120,9 @@ if HAS_DBUS:
             self.services = []
             super().__init__(bus, self.path)
 
+        def get_path(self):
+            return dbus.ObjectPath(self.path)
+
         @dbus.service.method(OM_IFACE, out_signature="a{oa{sa{sv}}}")
         def GetManagedObjects(self):
             res = {}
@@ -144,10 +149,20 @@ if HAS_DBUS:
             return {
                 SVC_IFACE: {
                     "UUID": self.uuid,
-                    "Primary": True,
+                    "Primary": dbus.Boolean(True),
                     "Characteristics": dbus.Array([c.get_path() for c in self.chars], signature="o")
                 }
             }
+
+        @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
+        def GetAll(self, interface):
+            if interface != SVC_IFACE:
+                return {}
+            return self.get_properties()[SVC_IFACE]
+
+        @dbus.service.method(PROP_IFACE, in_signature="ss", out_signature="v")
+        def Get(self, interface, prop):
+            return self.GetAll(interface).get(prop)
 
     class BleCharacteristic(dbus.service.Object):
         def __init__(self, service, index, uuid, flags, value=b""):
@@ -165,19 +180,31 @@ if HAS_DBUS:
             return dbus.ObjectPath(self.path)
 
         def get_properties(self):
-            return {
-                CHR_IFACE: {
-                    "Service": self.service.get_path(),
-                    "UUID": self.uuid,
-                    "Flags": self.flags,
-                    "Descriptors": dbus.Array([d.get_path() for d in self.descs], signature="o")
-                }
+            props = {
+                "Service": self.service.get_path(),
+                "UUID": self.uuid,
+                "Flags": dbus.Array(self.flags, signature="s"),
+                "Descriptors": dbus.Array([d.get_path() for d in self.descs], signature="o"),
+                "Value": dbus.ByteArray(self.value)
             }
+            if "notify" in self.flags:
+                props["Notifying"] = dbus.Boolean(self.notifying)
+            return {CHR_IFACE: props}
+
+        @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
+        def GetAll(self, interface):
+            if interface != CHR_IFACE:
+                return {}
+            return self.get_properties()[CHR_IFACE]
+
+        @dbus.service.method(PROP_IFACE, in_signature="ss", out_signature="v")
+        def Get(self, interface, prop):
+            return self.GetAll(interface).get(prop)
 
         @dbus.service.method(CHR_IFACE, in_signature="a{sv}", out_signature="ay")
         def ReadValue(self, options):
             off = int(options.get("offset", 0))
-            return dbus.Array(self.value[off:], signature="y")
+            return dbus.ByteArray(self.value[off:])
 
         @dbus.service.method(CHR_IFACE, in_signature="aya{sv}")
         def WriteValue(self, value, options):
@@ -185,10 +212,12 @@ if HAS_DBUS:
 
         @dbus.service.method(CHR_IFACE)
         def StartNotify(self):
+            print(f"[Bluetooth BLE] StartNotify on {self.uuid}")
             self.notifying = True
 
         @dbus.service.method(CHR_IFACE)
         def StopNotify(self):
+            print(f"[Bluetooth BLE] StopNotify on {self.uuid}")
             self.notifying = False
 
         @dbus.service.signal(PROP_IFACE, signature="sa{sv}as")
@@ -197,7 +226,14 @@ if HAS_DBUS:
 
         def notify(self, value):
             self.value = bytes(value)
-            self.PropertiesChanged(CHR_IFACE, {"Value": dbus.Array(self.value, signature="y")}, [])
+            try:
+                self.PropertiesChanged(
+                    CHR_IFACE,
+                    dbus.Dictionary({"Value": dbus.ByteArray(self.value)}, signature="sv"),
+                    []
+                )
+            except Exception:
+                pass
 
     class BleDescriptor(dbus.service.Object):
         def __init__(self, chrc, index, uuid, flags, value):
@@ -217,13 +253,24 @@ if HAS_DBUS:
                 DSC_IFACE: {
                     "Characteristic": self.chrc.get_path(),
                     "UUID": self.uuid,
-                    "Flags": self.flags
+                    "Flags": dbus.Array(self.flags, signature="s"),
+                    "Value": dbus.ByteArray(self.value)
                 }
             }
 
+        @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
+        def GetAll(self, interface):
+            if interface != DSC_IFACE:
+                return {}
+            return self.get_properties()[DSC_IFACE]
+
+        @dbus.service.method(PROP_IFACE, in_signature="ss", out_signature="v")
+        def Get(self, interface, prop):
+            return self.GetAll(interface).get(prop)
+
         @dbus.service.method(DSC_IFACE, in_signature="a{sv}", out_signature="ay")
         def ReadValue(self, options):
-            return dbus.Array(self.value, signature="y")
+            return dbus.ByteArray(self.value)
 
     class BleAdvertisement(dbus.service.Object):
         def __init__(self, bus, name="RG35XX-H (Xbox)"):
@@ -231,21 +278,77 @@ if HAS_DBUS:
             self.name = name
             super().__init__(bus, self.path)
 
+        def get_properties(self):
+            return {
+                ADV_IFACE: {
+                    "Type": "peripheral",
+                    "ServiceUUIDs": dbus.Array(["1812", "180f", "180a"], signature="s"),
+                    "Appearance": dbus.UInt16(0x03C4),  # Gamepad
+                    "LocalName": self.name,
+                    "Discoverable": dbus.Boolean(True)
+                }
+            }
+
         @dbus.service.method(PROP_IFACE, in_signature="s", out_signature="a{sv}")
         def GetAll(self, interface):
-            return {
-                "Type": "peripheral",
-                "ServiceUUIDs": dbus.Array(["1812", "180f"], signature="s"),
-                "Appearance": dbus.UInt16(0x03C4),  # Gamepad
-                "LocalName": self.name,
-                "Discoverable": True,
-                "MinInterval": dbus.UInt32(30),
-                "MaxInterval": dbus.UInt32(60)
-            }
+            if interface != ADV_IFACE:
+                return {}
+            return self.get_properties()[ADV_IFACE]
+
+        @dbus.service.method(PROP_IFACE, in_signature="ss", out_signature="v")
+        def Get(self, interface, prop):
+            return self.GetAll(interface).get(prop)
 
         @dbus.service.method(ADV_IFACE)
         def Release(self):
             pass
+
+    class ClassicHidProfile(dbus.service.Object):
+        """BlueZ Profile1 implementation for Classic Bluetooth HID."""
+        def __init__(self, bus, controller):
+            self.bus = bus
+            self.controller = controller
+            self.sock = None
+            super().__init__(bus, PROFILE_PATH)
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="", out_signature="")
+        def Release(self):
+            print("[Bluetooth Profile] Released")
+            if self.sock:
+                try: self.sock.close()
+                except Exception: pass
+                self.sock = None
+            self.controller._profile_sock = None
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="", out_signature="")
+        def Cancel(self):
+            print("[Bluetooth Profile] Cancelled")
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="oha{sv}", out_signature="")
+        def NewConnection(self, path, fd, properties):
+            raw_fd = fd.take()
+            print(f"[Bluetooth Profile] NewConnection from {path}, fd={raw_fd}")
+            try:
+                self.sock = socket.socket(fileno=raw_fd)
+                self.sock.setblocking(False)
+                self.controller._profile_sock = self.sock
+                self.controller.is_connected = True
+                self.controller._conn_time = time.monotonic()
+                self.controller.host_name = f"Connected ({path.split('/')[-1]})"
+                print(f"[Bluetooth Profile] Socket initialized: fd={raw_fd}")
+            except Exception as e:
+                print(f"[Bluetooth Profile] Socket init error: {e}")
+
+        @dbus.service.method("org.bluez.Profile1", in_signature="o", out_signature="")
+        def RequestDisconnection(self, path):
+            print(f"[Bluetooth Profile] Disconnection requested: {path}")
+            if self.sock:
+                try: self.sock.close()
+                except Exception: pass
+                self.sock = None
+            self.controller._profile_sock = None
+            self.controller.is_connected = False
+            self.controller.host_name = "Waiting for host..."
 
     class DbusPairingAgent(dbus.service.Object):
         """Auto-approving pairing agent for BlueZ."""
@@ -332,12 +435,14 @@ class BluetoothController:
         self._ctrl_client = None
         self._int_client = None
 
-        # BLE D-Bus objects
+        # BLE D-Bus & Classic Profile objects
         self._bus = None
         self._agent = None
         self._ble_app = None
         self._ble_adv = None
         self._ble_report_chr = None
+        self._classic_profile = None
+        self._profile_sock = None
         self._dbus_loop = None
 
     def check_stack(self) -> bool:
@@ -581,46 +686,80 @@ class BluetoothController:
                 except Exception as e:
                     print(f"[Bluetooth] D-Bus Agent note: {e}")
 
+                # Register Classic Bluetooth HID profile via ProfileManager1
+                try:
+                    self._classic_profile = ClassicHidProfile(self._bus, self)
+                    pm = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"), "org.bluez.ProfileManager1")
+                    pm.RegisterProfile(
+                        PROFILE_PATH,
+                        HID_PROFILE_UUID,
+                        {
+                            "Name": dbus.String(name),
+                            "Role": dbus.String("server"),
+                            "RequireAuthentication": dbus.Boolean(False),
+                            "RequireAuthorization": dbus.Boolean(False),
+                            "AutoConnect": dbus.Boolean(True),
+                        }
+                    )
+                    print("[Bluetooth] Classic HID Profile registered with BlueZ")
+                except Exception as e:
+                    print(f"[Bluetooth] Classic Profile registration note: {e}")
+
                 # Find Bluetooth adapter and register GATT Application
                 try:
                     om = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/"), OM_IFACE)
                     adapter_path = next((p for p, ifs in om.GetManagedObjects().items() if GATT_MGR in ifs), None)
+                    if not adapter_path:
+                        adapter_path = "/org/bluez/hci0"
 
-                    if adapter_path:
-                        adapter = self._bus.get_object(BLUEZ_SERVICE, adapter_path)
-                        props = dbus.Interface(adapter, PROP_IFACE)
-                        props.Set("org.bluez.Adapter1", "Powered", True)
-                        props.Set("org.bluez.Adapter1", "Pairable", True)
-                        props.Set("org.bluez.Adapter1", "Alias", name)
+                    adapter = self._bus.get_object(BLUEZ_SERVICE, adapter_path)
+                    props = dbus.Interface(adapter, PROP_IFACE)
+                    props.Set("org.bluez.Adapter1", "Powered", True)
+                    props.Set("org.bluez.Adapter1", "Pairable", True)
+                    props.Set("org.bluez.Adapter1", "Discoverable", True)
+                    props.Set("org.bluez.Adapter1", "Alias", name)
 
-                        app = BleApplication(self._bus)
-                        hid = BleService(self._bus, app, 0, "1812")
-                        app.services.append(hid)
-                        BleCharacteristic(hid, 0, "2a4a", ["read"], bytes([0x11, 0x01, 0x00, 0x02]))
-                        BleCharacteristic(hid, 1, "2a4b", ["encrypt-read"], XBOX_REPORT_MAP if self.mode == "bt_ble" else GENERIC_REPORT_MAP)
-                        BleCharacteristic(hid, 2, "2a4c", ["write-without-response"], b"\x00")
-                        BleCharacteristic(hid, 3, "2a4e", ["read", "write-without-response"], b"\x01")
-                        
-                        self._ble_report_chr = BleCharacteristic(hid, 4, "2a4d", ["encrypt-read", "notify"], bytes(16 if self.mode == "bt_ble" else 9))
-                        BleDescriptor(self._ble_report_chr, 0, "2908", ["read"], bytes([0x01, 0x01]))
+                    app = BleApplication(self._bus)
 
-                        bat = BleService(self._bus, app, 1, "180f")
-                        app.services.append(bat)
-                        BleCharacteristic(bat, 0, "2a19", ["read", "notify"], bytes([100]))
+                    # Service 0: HID Service (1812)
+                    hid = BleService(self._bus, app, 0, "1812")
+                    app.services.append(hid)
+                    BleCharacteristic(hid, 0, "2a4a", ["read"], bytes([0x11, 0x01, 0x00, 0x02]))
+                    BleCharacteristic(hid, 1, "2a4b", ["read"], XBOX_REPORT_MAP if self.mode == "bt_ble" else GENERIC_REPORT_MAP)
+                    BleCharacteristic(hid, 2, "2a4c", ["write-without-response"], b"\x00")
+                    BleCharacteristic(hid, 3, "2a4e", ["read", "write-without-response"], b"\x01")
+                    
+                    self._ble_report_chr = BleCharacteristic(hid, 4, "2a4d", ["read", "notify"], bytes(16 if self.mode == "bt_ble" else 9))
+                    BleDescriptor(self._ble_report_chr, 0, "2908", ["read"], bytes([0x01, 0x01]))
 
-                        gatt = dbus.Interface(adapter, GATT_MGR)
-                        gatt.RegisterApplication(app.path, {}, reply_handler=lambda: print("[Bluetooth BLE] GATT HID service registered"), error_handler=lambda e: print(f"[Bluetooth BLE] GATT reg failed: {e}"))
-                        self._ble_app = app
+                    # Service 1: Battery Service (180f)
+                    bat = BleService(self._bus, app, 1, "180f")
+                    app.services.append(bat)
+                    BleCharacteristic(bat, 0, "2a19", ["read", "notify"], bytes([100]))
 
-                        self._ble_adv = BleAdvertisement(self._bus, name=name)
-                        advm = dbus.Interface(adapter, ADV_MGR)
-                        advm.RegisterAdvertisement(self._ble_adv.path, {}, reply_handler=lambda: print(f"[Bluetooth BLE] Advertising as '{name}'"), error_handler=lambda e: print(f"[Bluetooth BLE] Adv failed: {e}"))
+                    # Service 2: Device Information Service (180a)
+                    devinfo = BleService(self._bus, app, 2, "180a")
+                    app.services.append(devinfo)
+                    mfg = b"Microsoft Corporation" if self.mode == "bt_ble" else b"Nintendo"
+                    mdl = b"Xbox Wireless Controller" if self.mode == "bt_ble" else b"Pro Controller"
+                    pnp = bytes([0x01, 0x5e, 0x04, 0xfd, 0x02, 0x00, 0x01]) if self.mode == "bt_ble" else bytes([0x01, 0x7e, 0x05, 0x09, 0x20, 0x00, 0x01])
+                    BleCharacteristic(devinfo, 0, "2a29", ["read"], mfg)
+                    BleCharacteristic(devinfo, 1, "2a24", ["read"], mdl)
+                    BleCharacteristic(devinfo, 2, "2a50", ["read"], pnp)
 
-                        def _glib_worker():
-                            self._dbus_loop = GLib.MainLoop()
-                            self._dbus_loop.run()
+                    gatt = dbus.Interface(adapter, GATT_MGR)
+                    gatt.RegisterApplication(app.path, {}, reply_handler=lambda: print("[Bluetooth BLE] GATT HID service registered"), error_handler=lambda e: print(f"[Bluetooth BLE] GATT reg failed: {e}"))
+                    self._ble_app = app
 
-                        threading.Thread(target=_glib_worker, daemon=True).start()
+                    self._ble_adv = BleAdvertisement(self._bus, name=name)
+                    advm = dbus.Interface(adapter, ADV_MGR)
+                    advm.RegisterAdvertisement(self._ble_adv.path, {}, reply_handler=lambda: print(f"[Bluetooth BLE] Advertising as '{name}'"), error_handler=lambda e: print(f"[Bluetooth BLE] Adv failed: {e}"))
+
+                    def _glib_worker():
+                        self._dbus_loop = GLib.MainLoop()
+                        self._dbus_loop.run()
+
+                    threading.Thread(target=_glib_worker, daemon=True).start()
                 except Exception as e:
                     print(f"[Bluetooth] D-Bus GATT note: {e}")
             except Exception as e:
@@ -703,16 +842,30 @@ class BluetoothController:
             report_data = struct.pack("<HBBBBBBB", buttons, hat, lx, ly, rx, ry, lt, rt)
 
             sent = False
-            # 1. Send over L2CAP PSM 19 (HID Interrupt)
-            if self._int_client is not None:
+
+            # 1. Send over BlueZ Classic Profile socket if connected
+            if self._profile_sock is not None:
                 try:
-                    # 0xA1 header = HID Input Report (Report ID 1)
-                    self._int_client.send(b"\xa1" + report_data)
+                    # 0xA1 header = HID Input Report, 0x01 = Report ID 1
+                    self._profile_sock.send(b"\xa1\x01" + report_data)
                     sent = True
                 except (BlockingIOError, OSError):
                     pass
+                except Exception:
+                    self._profile_sock = None
 
-            # 2. Send over BLE GATT characteristic if active
+            # 2. Send over raw L2CAP PSM 19 (HID Interrupt) if connected
+            if self._int_client is not None:
+                try:
+                    # 0xA1 header = HID Input Report (Report ID 1)
+                    self._int_client.send(b"\xa1\x01" + report_data)
+                    sent = True
+                except (BlockingIOError, OSError):
+                    pass
+                except Exception:
+                    self._int_client = None
+
+            # 3. Send over BLE GATT characteristic if active
             if self._ble_report_chr is not None:
                 try:
                     if self.mode == "bt_ble":
@@ -720,9 +873,23 @@ class BluetoothController:
                         stick = lambda v: max(0, min(65535, v + 32768))
                         trig = lambda v: max(0, min(1023, v * 1023 // 255))
                         xb_hat = XBOX_HAT.get((dx, dy), 0)
+
+                        # Dual-mapped Xbox button bitfield for max driver compatibility
+                        xb_btn = 0
+                        if state.a: xb_btn |= (1 << 0)
+                        if state.b: xb_btn |= (1 << 1)
+                        if state.x: xb_btn |= (1 << 2) | (1 << 3)
+                        if state.y: xb_btn |= (1 << 4)
+                        if state.l1: xb_btn |= (1 << 5) | (1 << 6)
+                        if state.r1: xb_btn |= (1 << 7)
+                        if state.select: xb_btn |= (1 << 8) | (1 << 10)
+                        if state.start:  xb_btn |= (1 << 9)
+                        if state.l3:     xb_btn |= (1 << 11) | (1 << 13)
+                        if state.r3:     xb_btn |= (1 << 12) | (1 << 14)
+
                         xb_report = struct.pack("<HHHHHHBH",
                             stick(state.lx), stick(state.ly), stick(state.rx), stick(state.ry),
-                            trig(lt), trig(rt), xb_hat, buttons & 0x7FFF) + b"\x00"
+                            trig(lt), trig(rt), xb_hat, xb_btn & 0x7FFF) + b"\x00"
                         self._ble_report_chr.notify(xb_report)
                     else:
                         self._ble_report_chr.notify(report_data)
@@ -730,7 +897,7 @@ class BluetoothController:
                 except Exception:
                     pass
 
-            return sent or self.is_connected
+            return sent
         except Exception:
             return False
 
@@ -739,6 +906,12 @@ class BluetoothController:
         self.is_active = False
         self._stop_event.set()
         self.current_passkey = None
+
+        # Close Profile socket
+        if self._profile_sock is not None:
+            try: self._profile_sock.close()
+            except Exception: pass
+            self._profile_sock = None
 
         # Close L2CAP sockets
         for s in [self._ctrl_client, self._int_client, self._ctrl_sock, self._int_sock]:
@@ -751,6 +924,14 @@ class BluetoothController:
         self._int_sock = None
 
         # Clean D-Bus objects
+        if self._bus and self._classic_profile:
+            try:
+                pm = dbus.Interface(self._bus.get_object(BLUEZ_SERVICE, "/org/bluez"), "org.bluez.ProfileManager1")
+                pm.UnregisterProfile(PROFILE_PATH)
+            except Exception:
+                pass
+            self._classic_profile = None
+
         if self._dbus_loop:
             try: self._dbus_loop.quit()
             except Exception: pass
