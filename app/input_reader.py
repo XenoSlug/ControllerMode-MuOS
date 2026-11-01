@@ -63,11 +63,18 @@ ABS_HAT0Y = 0x11  # D-pad Y
 
 class GamepadState:
     def __init__(self):
-        # Buttons: True = pressed
+        # Mapped buttons (reflects button_layout setting for controller forwarding)
         self.a = False
         self.b = False
         self.x = False
         self.y = False
+
+        # Raw physical buttons on RG35XX H hardware (for UI navigation)
+        self.raw_a = False  # Physical 'A' button (Right / East)
+        self.raw_b = False  # Physical 'B' button (Bottom / South)
+        self.raw_x = False  # Physical 'X' button (Top / North)
+        self.raw_y = False  # Physical 'Y' button (Left / West)
+
         self.l1 = False
         self.r1 = False
         self.l2 = False
@@ -102,6 +109,10 @@ class GamepadState:
         s.b = self.b
         s.x = self.x
         s.y = self.y
+        s.raw_a = self.raw_a
+        s.raw_b = self.raw_b
+        s.raw_x = self.raw_x
+        s.raw_y = self.raw_y
         s.l1 = self.l1
         s.r1 = self.r1
         s.l2 = self.l2
@@ -238,8 +249,18 @@ class InputReader:
             
             if ev_type == EV_KEY:
                 pressed = (val != 0)
+
+                # Track physical button states for reliable UI navigation
+                if code in (BTN_SOUTH, 0x130):
+                    self.state.raw_b = pressed
+                elif code in (BTN_EAST, 0x131):
+                    self.state.raw_a = pressed
+                elif code in (BTN_NORTH, 0x133):
+                    self.state.raw_x = pressed
+                elif code in (BTN_WEST, 0x134):
+                    self.state.raw_y = pressed
                 
-                # Face buttons (Xbox layout vs Nintendo layout)
+                # Mapped face buttons (Xbox layout vs Nintendo layout for gameplay)
                 if code in (BTN_SOUTH, 0x130):
                     if self.button_layout == "nintendo":
                         self.state.b = pressed

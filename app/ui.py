@@ -190,6 +190,7 @@ class UIRenderer:
 
         # Render visible slice of items
         visible_indices = range(self.scroll_offset, min(len(items), self.scroll_offset + MAX_VISIBLE_ITEMS))
+        card_w = SCREEN_W - 88  # leaves room for scrollbar
 
         for slot, i in enumerate(visible_indices):
             y = start_y + slot * (card_h + gap)
@@ -198,24 +199,41 @@ class UIRenderer:
             bg_col = (36, 44, 58) if is_sel else C_PANEL
             border_col = C_ACCENT if is_sel else C_BORDER
 
-            self.draw_rect(36, y, SCREEN_W - 72, card_h, bg_col, fill=True)
-            self.draw_rect(36, y, SCREEN_W - 72, card_h, border_col, fill=False)
+            self.draw_rect(32, y, card_w, card_h, bg_col, fill=True)
+            self.draw_rect(32, y, card_w, card_h, border_col, fill=False)
 
             if is_sel:
-                self.draw_rect(36, y, 6, card_h, C_ACCENT, fill=True)
+                self.draw_rect(32, y, 6, card_h, C_ACCENT, fill=True)
 
             title_col = C_WHITE if is_sel else (200, 205, 215)
-            self.draw_text(items[i]["title"], 56, y + 8, title_col, "normal")
-            self.draw_text(items[i]["desc"], 56, y + 30, C_GRAY, "small")
+            self.draw_text(items[i]["title"], 50, y + 8, title_col, "normal")
+            self.draw_text(items[i]["desc"], 50, y + 30, C_GRAY, "small")
 
             if is_sel:
-                self.draw_text("►", SCREEN_W - 60, y + 16, C_ACCENT, "normal")
+                self.draw_text("►", 32 + card_w - 24, y + 16, C_ACCENT, "normal")
 
-        # Scroll indicator arrows if more items exist above or below
+        # Scrollbar Track and Thumb
+        sb_x = SCREEN_W - 36
+        sb_y = start_y
+        sb_h = MAX_VISIBLE_ITEMS * (card_h + gap) - gap
+        sb_w = 6
+
+        # Draw track
+        self.draw_rect(sb_x, sb_y, sb_w, sb_h, (36, 42, 54), fill=True)
+        self.draw_rect(sb_x, sb_y, sb_w, sb_h, C_BORDER, fill=False)
+
+        # Draw thumb
+        total_items = max(1, len(items))
+        max_scroll = max(1, total_items - MAX_VISIBLE_ITEMS)
+        thumb_h = max(32, int((MAX_VISIBLE_ITEMS / total_items) * sb_h))
+        thumb_y = sb_y + int((self.scroll_offset / max_scroll) * (sb_h - thumb_h))
+        self.draw_rect(sb_x, thumb_y, sb_w, thumb_h, C_ACCENT, fill=True)
+
+        # Scroll indicator arrows above and below track
         if self.scroll_offset > 0:
-            self.draw_text("▲", SCREEN_W - 20, start_y + 4, C_ACCENT, "small", center_x=True)
+            self.draw_text("▲", sb_x + 3, sb_y - 14, C_ACCENT, "small", center_x=True)
         if self.scroll_offset + MAX_VISIBLE_ITEMS < len(items):
-            self.draw_text("▼", SCREEN_W - 20, start_y + (MAX_VISIBLE_ITEMS * (card_h + gap)) - 20, C_ACCENT, "small", center_x=True)
+            self.draw_text("▼", sb_x + 3, sb_y + sb_h + 3, C_ACCENT, "small", center_x=True)
 
         # Bottom info bar
         self.draw_rect(0, SCREEN_H - 36, SCREEN_W, 36, C_PANEL)

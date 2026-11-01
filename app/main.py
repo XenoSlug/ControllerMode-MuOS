@@ -125,9 +125,9 @@ class ControllerApp:
             last_dpad_up = state.dpad_up
             last_dpad_down = state.dpad_down
 
-            # Confirm selection
-            confirm = (state.a and not last_a) or (state.start and not last_start)
-            last_a = state.a
+            # Confirm selection with physical A button (Right) or Start
+            confirm = (state.raw_a and not last_a) or (state.start and not last_start)
+            last_a = state.raw_a
             last_start = state.start
 
             if confirm:
@@ -175,20 +175,29 @@ class ControllerApp:
 
     def handle_updater_menu(self):
         """Interactive in-app update checker and installer."""
+        # Debounce: wait for release of physical buttons before starting
+        for _ in range(50):
+            st = self.input.get_state()
+            if not st.raw_a and not st.raw_b and not st.start and not st.menu:
+                break
+            time.sleep(0.02)
+
         if self.updater.status in ("idle", "error"):
-            # Check now synchronously
             self.ui.render_modal_message("Updater", "Checking GitHub for releases...", hint="")
             self.updater.check_update()
 
         last_a = False
         last_b = False
+        start_time = time.monotonic()
 
         while self.running:
             state = self.input.get_state()
-            btn_a = state.a and not last_a
-            btn_b = (state.b and not last_b) or state.menu
-            last_a = state.a
-            last_b = state.b
+            btn_a = state.raw_a and not last_a
+            btn_b = (state.raw_b and not last_b) or state.menu
+            last_a = state.raw_a
+            last_b = state.raw_b
+
+            elapsed = time.monotonic() - start_time
 
             if self.updater.status == "available":
                 v = self.updater.latest_info['version']
@@ -196,7 +205,6 @@ class ControllerApp:
                 self.ui.render_modal_message("Update Available", msg, hint="[A] Install Update    [B] Cancel")
 
                 if btn_a:
-                    # Download and install
                     self.rumble.pulse(100)
                     self.ui.render_modal_message("Downloading Update", "Fetching from GitHub...", progress=0, hint="")
                     
@@ -204,7 +212,6 @@ class ControllerApp:
                         self.ui.render_modal_message("Downloading Update", "Unpacking & Installing...", progress=pct, hint="")
 
                     self.updater.apply_update(progress_cb=_prog)
-                    # If apply_update returns, an error occurred
                     time.sleep(1.0)
                     break
 
@@ -214,15 +221,18 @@ class ControllerApp:
 
             elif self.updater.status == "up_to_date":
                 msg = f"You are on the latest version (v{CURRENT_VERSION}).\nNo updates needed!"
-                self.ui.render_modal_message("Up to Date", msg, hint="[B] Back to Menu")
-                if btn_b or btn_a:
+                hint = "[B] Close" if elapsed >= 1.2 else ""
+                self.ui.render_modal_message("Up to Date", msg, hint=hint)
+                # Keep on screen so user can read; allow dismiss after 1.2s or auto close after 3.5s
+                if (elapsed >= 1.2 and (btn_b or btn_a)) or (elapsed >= 3.5):
                     self.rumble.pulse(30)
                     break
 
             elif self.updater.status == "error":
                 msg = f"{self.updater.error_message}\nPlease check Wi-Fi connection."
-                self.ui.render_modal_message("Update Check Failed", msg, hint="[B] Back to Menu")
-                if btn_b or btn_a:
+                hint = "[B] Close" if elapsed >= 1.0 else ""
+                self.ui.render_modal_message("Update Check Failed", msg, hint=hint)
+                if (elapsed >= 1.0 and (btn_b or btn_a)) or (elapsed >= 4.0):
                     self.rumble.pulse(30)
                     break
 
