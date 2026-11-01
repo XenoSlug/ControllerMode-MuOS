@@ -63,11 +63,11 @@ class Updater:
                 tag_name = data.get("tag_name", "")
 
                 if is_newer(tag_name, CURRENT_VERSION):
-                    # Find .muxzip asset
+                    # Find .muxapp asset
                     download_url = None
                     asset_size = 0
                     for asset in data.get("assets", []):
-                        if asset.get("name", "").endswith(".muxzip") or asset.get("name", "").endswith(".zip"):
+                        if asset.get("name", "").endswith(".muxapp") or asset.get("name", "").endswith(".zip"):
                             download_url = asset.get("browser_download_url")
                             asset_size = asset.get("size", 0)
                             break

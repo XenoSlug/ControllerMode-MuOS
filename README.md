@@ -35,11 +35,11 @@ Inspired by and ported from the external controller features in [Handtop](https:
 
 ## 🚀 Installation on muOS
 
-### Option 1: Using the `.muxzip` Package (Recommended)
+### Option 1: Using the `.muxapp` Package (Recommended)
 
-1. Download the latest `ControllerMode-MuOS.muxzip` from [Releases](https://github.com/XenoSlug/ControllerMode-MuOS/releases).
-2. Insert your SD card into your computer and copy `ControllerMode-MuOS.muxzip` into the `ARCHIVE` folder (either on SD1 `mmc` or SD2 `sdcard`).
-3. Boot your RG35XX H and navigate to **Applications → Archive Manager** (or Archive installer) to install.
+1. Download the latest `ControllerMode-MuOS.muxapp` from [Releases](https://github.com/XenoSlug/ControllerMode-MuOS/releases).
+2. Insert your SD card into your computer and copy `ControllerMode-MuOS.muxapp` into the `ARCHIVE` folder (either on SD1 `mmc` or SD2 `sdcard`).
+3. Boot your RG35XX H and navigate to **Applications → Archive Manager** to install.
 4. Launch **Controller Mode** from the muOS Applications menu!
 
 ### Option 2: Manual Installation
